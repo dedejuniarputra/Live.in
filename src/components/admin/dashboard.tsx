@@ -155,7 +155,7 @@ Selamat menikmati momennya`
   // Status & feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
-  // Close admin menu when clicking outside
+  // Close admin menu clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (

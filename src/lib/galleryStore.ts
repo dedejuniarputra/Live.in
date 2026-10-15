@@ -1,4 +1,4 @@
-import { scanGoogleDriveFolder, type DrivePhotoItem } from './googleDrive.ts'
+import type { DrivePhotoItem } from './googleDrive.ts'
 
 export interface GalleryPhoto extends DrivePhotoItem {
   category?: 'Group' | 'Keluarga' | 'Sendiri'
@@ -24,6 +24,7 @@ export interface GalleryData {
   highlightDescription?: string
   selectedPhotoIds: string[]
   photos: GalleryPhoto[]
+  allowDownload?: boolean
 }
 
 const STORAGE_KEY = 'livein_galleries_v3'
@@ -231,6 +232,8 @@ export function normalizeGalleryItem(item: any): GalleryData {
     highlightDescription: (item.highlightDescription || '').toString(),
     selectedPhotoIds,
     photos,
+    allowDownload:
+      item.allowDownload !== undefined ? Boolean(item.allowDownload) : true,
   }
 }
 
@@ -325,6 +328,46 @@ export function saveOrUpdateGallery(newGallery: GalleryData): void {
     current.unshift(normalized)
   }
   saveStoredGalleries(current)
+}
+
+export function updateGallery(updated: GalleryData): GalleryData[] {
+  const current = getStoredGalleries()
+  const normalized = normalizeGalleryItem(updated)
+  const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
+  const targetId = clean(normalized.id)
+
+  const index = current.findIndex((g) => clean(g.id) === targetId)
+  if (index >= 0) {
+    current[index] = {
+      ...current[index],
+      ...normalized,
+      photos:
+        normalized.photos && normalized.photos.length > 0
+          ? normalized.photos
+          : current[index].photos,
+      coverUrl: normalized.coverUrl || current[index].coverUrl,
+    }
+  } else {
+    current.unshift(normalized)
+  }
+  saveStoredGalleries(current)
+  return current
+}
+
+export function toggleGalleryDownload(id: string): GalleryData[] {
+  const current = getStoredGalleries()
+  const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
+  const targetId = clean(id)
+  const index = current.findIndex((g) => clean(g.id) === targetId)
+  if (index >= 0) {
+    const prev = current[index].allowDownload !== false
+    current[index] = {
+      ...current[index],
+      allowDownload: !prev,
+    }
+    saveStoredGalleries(current)
+  }
+  return current
 }
 
 export function deleteGallery(id: string, slug?: string): GalleryData[] {

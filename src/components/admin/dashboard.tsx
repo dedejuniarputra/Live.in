@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Copy,
   CloudDownload,
+  CloudOff,
   Pencil,
   Settings,
   Clock,
@@ -28,6 +29,8 @@ import { signOutAdmin, supabase, ADMIN_EMAIL } from '../../lib/supabase.ts'
 import {
   getStoredGalleries,
   saveOrUpdateGallery,
+  updateGallery,
+  toggleGalleryDownload,
   deleteGallery,
   type GalleryData,
 } from '../../lib/galleryStore.ts'
@@ -145,6 +148,170 @@ Selamat menikmati momennya`
     setGalleries([...updated])
     setGalleryToDelete(null)
     showToast(`Galeri "${gallery.clientName}" berhasil dihapus.`)
+  }
+
+  // Edit Gallery Modal State & Handlers
+  const [editingGallery, setGalleryToEdit] = useState<GalleryData | null>(null)
+  const [editClientName, setEditClientName] = useState('')
+  const [editSlug, setEditSlug] = useState('')
+  const [editEventDate, setEditEventDate] = useState('')
+  const [editMaxPhotos, setEditMaxPhotos] = useState('60')
+  const [editRemainingDays, setEditRemainingDays] = useState('30')
+  const [editStatus, setEditStatus] = useState<
+    'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'
+  >('Belum mulai')
+  const [editWhatsapp, setEditWhatsapp] = useState('')
+  const [editDriveLink, setEditDriveLink] = useState('')
+  const [editHighlightDescription, setEditHighlightDescription] = useState('')
+  const [editPinCode, setEditPinCode] = useState('')
+  const [editIsClientViewed, setEditIsClientViewed] = useState(false)
+  const [editNewScannedPhotos, setEditNewScannedPhotos] = useState<
+    DrivePhotoItem[] | null
+  >(null)
+  const [isEditScanning, setIsEditScanning] = useState(false)
+  const [editScanError, setEditScanError] = useState<string | null>(null)
+  const [editScanSuccessMsg, setEditScanSuccessMsg] = useState<string | null>(null)
+
+  const openEditModal = (gallery: GalleryData) => {
+    setGalleryToEdit(gallery)
+    setEditClientName(gallery.clientName || '')
+    setEditSlug(gallery.slug || '')
+    setEditEventDate(gallery.date || '')
+    setEditMaxPhotos(String(gallery.maxPhotos || 60))
+    setEditRemainingDays(String(gallery.remainingDays || 30))
+    setEditStatus(gallery.status || 'Belum mulai')
+    setEditWhatsapp(gallery.whatsapp || '')
+    setEditDriveLink(gallery.driveLink || '')
+    setEditHighlightDescription(gallery.highlightDescription || '')
+    setEditPinCode(gallery.pinCode || '')
+    setEditIsClientViewed(Boolean(gallery.isClientViewed))
+    setEditNewScannedPhotos(null)
+    setIsEditScanning(false)
+    setEditScanError(null)
+    setEditScanSuccessMsg(null)
+  }
+
+  const handleEditWhatsappChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const sanitized = e.target.value.replace(/\D/g, '')
+    setEditWhatsapp(sanitized)
+  }
+
+  const handleEditRescanDrive = async () => {
+    const url = editDriveLink.trim()
+    if (!url) {
+      setEditScanError('Masukkan link Google Drive terlebih dahulu.')
+      return
+    }
+
+    const folderId = extractDriveFolderId(url)
+    if (!folderId) {
+      setEditScanError(
+        'Link folder Google Drive tidak valid atau ID folder tidak ditemukan.'
+      )
+      return
+    }
+
+    setIsEditScanning(true)
+    setEditScanError(null)
+    setEditScanSuccessMsg(null)
+
+    try {
+      const res = await scanGoogleDriveFolder(url, editClientName)
+      setIsEditScanning(false)
+      if (res.success && res.photos && res.photos.length > 0) {
+        setEditNewScannedPhotos(res.photos)
+        setEditScanSuccessMsg(
+          `Berhasil memindai ${res.photos.length} foto dari Google Drive!`
+        )
+      } else {
+        setEditScanError(
+          res.error ||
+            'Folder Google Drive kosong atau tidak dapat diakses. Pastikan hak akses diset "Siapa saja yang memiliki link" -> "Pelihat".'
+        )
+      }
+    } catch (err: any) {
+      setIsEditScanning(false)
+      setEditScanError(err?.message || 'Gagal memindai folder Google Drive.')
+    }
+  }
+
+  const handleSaveEdit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!editingGallery) return
+
+    const trimmedName = editClientName.trim() || editingGallery.clientName
+    const trimmedWhatsapp = editWhatsapp.replace(/\D/g, '')
+
+    if (!trimmedWhatsapp) {
+      showToast('Nomor WhatsApp wajib diisi.')
+      return
+    }
+
+    const safeSlug =
+      (editSlug.trim() || trimmedName)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || editingGallery.slug
+
+    const updatedItem: GalleryData = {
+      ...editingGallery,
+      clientName: trimmedName,
+      slug: safeSlug,
+      date: editEventDate || editingGallery.date,
+      maxPhotos: parseInt(editMaxPhotos) || editingGallery.maxPhotos,
+      remainingDays: parseInt(editRemainingDays) || editingGallery.remainingDays,
+      status: editStatus,
+      whatsapp: trimmedWhatsapp,
+      driveLink: editDriveLink.trim() || editingGallery.driveLink,
+      highlightDescription: editHighlightDescription.trim(),
+      pinCode: editPinCode.trim() || undefined,
+      isClientViewed: editIsClientViewed,
+      photos:
+        editNewScannedPhotos && editNewScannedPhotos.length > 0
+          ? editNewScannedPhotos
+          : editingGallery.photos,
+      coverUrl:
+        editNewScannedPhotos && editNewScannedPhotos.length > 0
+          ? editNewScannedPhotos[0]?.url || editingGallery.coverUrl
+          : editingGallery.coverUrl,
+      selectedPhotos: editingGallery.selectedPhotoIds?.length || 0,
+    }
+
+    const updatedList = updateGallery(updatedItem)
+    setGalleries([...updatedList])
+    setGalleryToEdit(null)
+    showToast(`Data galeri "${trimmedName}" berhasil diperbarui!`)
+  }
+
+  // Buka Folder Google Drive
+  const handleOpenDriveFolder = (gallery: GalleryData) => {
+    const rawLink = (gallery.driveLink || '').trim()
+
+    if (!rawLink) {
+      showToast(
+        `Link Google Drive belum diisi untuk "${gallery.clientName}". Silakan lengkapi di Edit Galeri.`
+      )
+      openEditModal(gallery)
+      return
+    }
+
+    let targetUrl = rawLink
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+      const folderId = extractDriveFolderId(targetUrl)
+      if (folderId) {
+        targetUrl = `https://drive.google.com/drive/folders/${folderId}`
+      } else {
+        targetUrl = `https://${targetUrl}`
+      }
+    }
+
+    const newWindow = window.open(targetUrl, '_blank', 'noopener,noreferrer')
+    if (newWindow) {
+      showToast(`Membuka folder Google Drive untuk "${gallery.clientName}"...`)
+    } else {
+      window.location.href = targetUrl
+    }
   }
 
   // Scanning modal state (saat submit)
@@ -558,24 +725,6 @@ Selamat menikmati momennya`
                   </span>
                 </div>
 
-                {/* Tombol Demo Link untuk Pengujian Cepat */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const demoLink = 'https://drive.google.com/drive/folders/sample-dede-wedding'
-                    setDriveLink(demoLink)
-                    handleScanLink(demoLink)
-                  }}
-                  className={`text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 ${
-                    isDarkMode
-                      ? 'text-indigo-400 hover:text-indigo-300'
-                      : 'text-[#9C7844] hover:underline'
-                  }`}
-                  title="Gunakan link contoh Google Drive untuk melihat hasil foto"
-                >
-                  <Sparkles className="h-3 w-3" />
-                  <span>Contoh Link Drive</span>
-                </button>
               </div>
 
               <div className="relative flex items-center">
@@ -1280,18 +1429,17 @@ Selamat menikmati momennya`
                         <Copy className="h-3.5 w-3.5" />
                       </button>
 
-                      {/* Download Cloud Button */}
+                      {/* Download Cloud / Buka Drive Foto Button */}
                       <button
                         type="button"
-                        onClick={() =>
-                          showToast('Membuka folder Google Drive...')
-                        }
+                        onClick={() => handleOpenDriveFolder(gallery)}
                         className={`flex h-8 w-8 items-center justify-center rounded-xl border transition-colors cursor-pointer ${
                           isDarkMode
-                            ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:border-slate-700'
-                            : 'border-stone-200 bg-white text-stone-500 hover:text-stone-800 hover:border-stone-300'
+                            ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-sky-400 hover:border-sky-500/40 hover:bg-sky-500/10'
+                            : 'border-stone-200 bg-white text-stone-500 hover:text-sky-600 hover:border-sky-300 hover:bg-sky-50'
                         }`}
                         title="Buka Drive Foto"
+                        aria-label="Buka Drive Foto"
                       >
                         <CloudDownload className="h-3.5 w-3.5" />
                       </button>
@@ -1299,15 +1447,14 @@ Selamat menikmati momennya`
                       {/* Edit Button */}
                       <button
                         type="button"
-                        onClick={() =>
-                          showToast(`Edit data ${gallery.clientName}`)
-                        }
+                        onClick={() => openEditModal(gallery)}
                         className={`flex h-8 w-8 items-center justify-center rounded-xl border transition-colors cursor-pointer ${
                           isDarkMode
-                            ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:border-slate-700'
-                            : 'border-stone-200 bg-white text-stone-500 hover:text-stone-800 hover:border-stone-300'
+                            ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-[#C9A26A] hover:border-[#9C7844]/50'
+                            : 'border-stone-200 bg-white text-stone-500 hover:text-[#9C7844] hover:border-[#9C7844]/50'
                         }`}
                         title="Edit Galeri"
+                        aria-label="Edit Galeri"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
@@ -1365,11 +1512,10 @@ Selamat menikmati momennya`
 
                   {/* Bottom Strip: Update Foto Editan + Gratis */}
                   <div
-                    onClick={() =>
-                      showToast(
-                        'Memperbarui foto editan dari Google Drive...'
-                      )
-                    }
+                    onClick={() => {
+                      openEditModal(gallery)
+                      showToast(`Buka formulir edit untuk memperbarui foto ${gallery.clientName}`)
+                    }}
                     className={`mt-4 rounded-xl border px-4 py-2.5 flex items-center justify-between transition-colors cursor-pointer group ${
                       isDarkMode
                         ? 'border-slate-800/90 bg-slate-950/60 hover:bg-slate-900/80 text-[#C9A26A]'
@@ -1719,6 +1865,418 @@ Selamat menikmati momennya`
                 Selesai Pratinjau
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Edit Data Galeri */}
+      {editingGallery && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200"
+          onClick={() => setGalleryToEdit(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-2xl max-h-[92vh] flex flex-col rounded-3xl border shadow-2xl overflow-hidden transition-all animate-in zoom-in-95 duration-150 ${
+              isDarkMode
+                ? 'border-slate-800 bg-[#0d131f] text-slate-100 shadow-black/80'
+                : 'border-stone-200 bg-white text-stone-900 shadow-stone-900/15'
+            }`}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-stone-200/80 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#9C7844]/15 text-[#9C7844] shrink-0">
+                  <Pencil className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold tracking-tight">
+                    Edit Data Galeri
+                  </h3>
+                  <p className="text-xs text-stone-500 dark:text-slate-400">
+                    Perbarui informasi klien, batas seleksi, dan data galeri
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGalleryToEdit(null)}
+                className="rounded-xl p-2 text-stone-400 hover:text-stone-600 dark:hover:text-slate-200 hover:bg-stone-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                title="Tutup"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body Form */}
+            <form onSubmit={handleSaveEdit} className="flex-1 overflow-y-auto p-6 space-y-5">
+              {/* Row 1: Nama Klien & Nomor WhatsApp */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label
+                    htmlFor="editClientName"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Nama Klien <span className="text-[#9C7844]">*</span>
+                  </label>
+                  <input
+                    id="editClientName"
+                    type="text"
+                    required
+                    value={editClientName}
+                    onChange={(e) => setEditClientName(e.target.value)}
+                    placeholder="Contoh: WISUDA PUTRA 2026"
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="editWhatsapp"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    WhatsApp Klien <span className="text-[#9C7844]">*</span>
+                  </label>
+                  <input
+                    id="editWhatsapp"
+                    type="tel"
+                    required
+                    value={editWhatsapp}
+                    onChange={handleEditWhatsappChange}
+                    placeholder="08123456789"
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Slug URL & Tanggal Acara */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label
+                    htmlFor="editSlug"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Slug URL Klien
+                  </label>
+                  <input
+                    id="editSlug"
+                    type="text"
+                    value={editSlug}
+                    onChange={(e) => setEditSlug(e.target.value)}
+                    placeholder="wisuda-putra-2026"
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                    }`}
+                  />
+                  <p className="mt-1 text-[11px] text-stone-400 dark:text-slate-500 truncate">
+                    Tautan: /livesotory-co/{editSlug || 'klien'}
+                  </p>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="editEventDate"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Tanggal Acara
+                  </label>
+                  <input
+                    id="editEventDate"
+                    type="date"
+                    value={editEventDate}
+                    onChange={(e) => setEditEventDate(e.target.value)}
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 cursor-pointer ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 focus:bg-slate-950 [color-scheme:dark]'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 focus:bg-white'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              {/* Row 3: Batas Maksimal Foto, Sisa Hari & Status Galeri */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label
+                    htmlFor="editMaxPhotos"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Maks. Foto Dipilih
+                  </label>
+                  <input
+                    id="editMaxPhotos"
+                    type="number"
+                    min="1"
+                    value={editMaxPhotos}
+                    onChange={(e) => setEditMaxPhotos(e.target.value)}
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 focus:bg-white'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="editRemainingDays"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Sisa Waktu (Hari)
+                  </label>
+                  <input
+                    id="editRemainingDays"
+                    type="number"
+                    min="0"
+                    value={editRemainingDays}
+                    onChange={(e) => setEditRemainingDays(e.target.value)}
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 focus:bg-white'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="editStatus"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Status Galeri
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="editStatus"
+                      value={editStatus}
+                      onChange={(e) =>
+                        setEditStatus(
+                          e.target.value as
+                            | 'Belum mulai'
+                            | 'Sedang memilih'
+                            | 'Selesai dipilih'
+                        )
+                      }
+                      className={`w-full appearance-none rounded-xl border py-2.5 pl-3.5 pr-8 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 cursor-pointer ${
+                        isDarkMode
+                          ? 'border-slate-800 bg-slate-950/70 text-slate-100 focus:bg-slate-950'
+                          : 'border-stone-200 bg-stone-50/40 text-stone-800 focus:bg-white'
+                      }`}
+                    >
+                      <option value="Belum mulai" className={isDarkMode ? 'bg-slate-900 text-slate-100' : ''}>
+                        Belum mulai
+                      </option>
+                      <option value="Sedang memilih" className={isDarkMode ? 'bg-slate-900 text-slate-100' : ''}>
+                        Sedang memilih
+                      </option>
+                      <option value="Selesai dipilih" className={isDarkMode ? 'bg-slate-900 text-slate-100' : ''}>
+                        Selesai dipilih
+                      </option>
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-stone-400">
+                      <ChevronDown className="h-4 w-4" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 4: Link Folder Google Drive & Pindai Ulang */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="editDriveLink"
+                    className={`text-[11px] font-bold tracking-wider uppercase ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Link Folder Google Drive
+                  </label>
+                  <span className="text-[11px] font-medium text-stone-400 dark:text-slate-500">
+                    {editNewScannedPhotos
+                      ? `${editNewScannedPhotos.length} foto baru terdeteksi`
+                      : `${editingGallery.photos?.length || 0} foto tersimpan`}
+                  </span>
+                </div>
+
+                <div className="relative flex items-center">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-stone-400">
+                    <Link2 className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="editDriveLink"
+                    type="url"
+                    value={editDriveLink}
+                    onChange={(e) => setEditDriveLink(e.target.value)}
+                    placeholder="https://drive.google.com/drive/folders/..."
+                    className={`w-full rounded-xl border py-2.5 pl-10 pr-32 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                    }`}
+                  />
+                  <div className="absolute right-1.5 inset-y-1.5 flex items-center">
+                    <button
+                      type="button"
+                      onClick={handleEditRescanDrive}
+                      disabled={isEditScanning || !editDriveLink.trim()}
+                      className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold bg-[#9C7844]/15 hover:bg-[#9C7844]/25 text-[#9C7844] transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {isEditScanning ? (
+                        <>
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          <span>Memindai...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3 w-3" />
+                          <span>Pindai Ulang</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {editScanError && (
+                  <p className="mt-1.5 text-xs text-rose-500 flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    <span>{editScanError}</span>
+                  </p>
+                )}
+                {editScanSuccessMsg && (
+                  <p className="mt-1.5 text-xs text-emerald-500 flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    <span>{editScanSuccessMsg}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* Row 5: Deskripsi Highlight & PIN Album */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label
+                    htmlFor="editHighlightDescription"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    Deskripsi Highlight
+                  </label>
+                  <input
+                    id="editHighlightDescription"
+                    type="text"
+                    value={editHighlightDescription}
+                    onChange={(e) => setEditHighlightDescription(e.target.value)}
+                    placeholder="Your Story in Frames"
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="editPinCode"
+                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                    }`}
+                  >
+                    PIN Keamanan Album (Opsional)
+                  </label>
+                  <input
+                    id="editPinCode"
+                    type="text"
+                    value={editPinCode}
+                    onChange={(e) => setEditPinCode(e.target.value)}
+                    placeholder="Contoh: 1234"
+                    maxLength={8}
+                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              {/* Row 6: Checkbox Status Dilihat Klien */}
+              <div className="pt-1">
+                <label className="flex items-center gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editIsClientViewed}
+                    onChange={(e) => setEditIsClientViewed(e.target.checked)}
+                    className="sr-only"
+                  />
+                  <div
+                    className={`h-4 w-4 rounded flex items-center justify-center border transition-all ${
+                      editIsClientViewed
+                        ? 'bg-[#9C7844] border-[#9C7844] text-white'
+                        : isDarkMode
+                        ? 'border-slate-700 bg-slate-950'
+                        : 'border-stone-300 bg-white'
+                    }`}
+                  >
+                    {editIsClientViewed && <Check className="h-3 w-3 stroke-[3]" />}
+                  </div>
+                  <span
+                    className={`text-xs font-semibold ${
+                      isDarkMode ? 'text-slate-300' : 'text-stone-700'
+                    }`}
+                  >
+                    Tandai galeri sudah dibuka oleh klien
+                  </span>
+                </label>
+              </div>
+
+              {/* Modal Footer Actions */}
+              <div className="pt-4 border-t border-stone-200/80 dark:border-slate-800 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setGalleryToEdit(null)}
+                  className={`rounded-xl border px-4 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                    isDarkMode
+                      ? 'border-slate-800 bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      : 'border-stone-200 bg-stone-100 text-stone-700 hover:bg-stone-200'
+                  }`}
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEditScanning}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#9C7844] hover:bg-[#8B6B3C] active:scale-[0.98] px-5 py-2.5 text-xs font-bold text-white shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Check className="h-3.5 w-3.5 stroke-[3]" />
+                  <span>Simpan Perubahan</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

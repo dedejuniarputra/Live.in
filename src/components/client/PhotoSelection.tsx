@@ -7,7 +7,6 @@ import {
   SlidersHorizontal,
   Moon,
   Sun,
-  Maximize2,
   X,
   ChevronLeft,
   ChevronRight,
@@ -781,19 +780,21 @@ Terima kasih!`
                 <Share2 className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
               </button>
 
-              <button
-                type="button"
-                onClick={() => handleDownloadPhoto(activePhoto)}
-                disabled={isDownloading}
-                className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg disabled:opacity-50"
-                title="Unduh Foto"
-              >
-                {isDownloading ? (
-                  <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                ) : (
-                  <Download className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
-                )}
-              </button>
+              {gallery?.allowDownload !== false && (
+                <button
+                  type="button"
+                  onClick={() => handleDownloadPhoto(activePhoto)}
+                  disabled={isDownloading}
+                  className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg disabled:opacity-50"
+                  title="Unduh Foto"
+                >
+                  {isDownloading ? (
+                    <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                  ) : (
+                    <Download className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+                  )}
+                </button>
+              )}
 
               <button
                 type="button"

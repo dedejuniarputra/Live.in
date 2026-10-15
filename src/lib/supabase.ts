@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://azecuvgsnbetvzzyypnh.supabase.co'
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_3c6PNmfWhhZjniobVawY1g_uC2diAUx'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
 
@@ -14,6 +14,20 @@ export const ADMIN_EMAIL = 'dedejuniarputra00@gmail.com'
  */
 export async function signInAdmin(email: string, password: string) {
   const normalizedEmail = email.trim().toLowerCase()
+
+  // Validasi di sisi fungsi juga, bukan hanya di form
+  if (!normalizedEmail || !password) {
+    return { data: null, error: new Error('Email dan kata sandi wajib diisi.') }
+  }
+  if (password.length < 6) {
+    return { data: null, error: new Error('Kata sandi minimal 6 karakter.') }
+  }
+  if (password.length > 128) {
+    return { data: null, error: new Error('Kata sandi terlalu panjang.') }
+  }
+  if (normalizedEmail.length > 254) {
+    return { data: null, error: new Error('Email terlalu panjang.') }
+  }
 
   // 1. Coba login langsung via Supabase
   const { data, error } = await supabase.auth.signInWithPassword({

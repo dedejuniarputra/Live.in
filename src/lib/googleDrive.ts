@@ -97,7 +97,7 @@ export async function scanGoogleDriveFolder(
         return {
           success: true,
           folderId: data.folderId || folderId,
-          folderName: data.folderName || '',
+          folderName: data.folderName || folderName || '',
           photos: data.photos,
           source: data.source,
         }

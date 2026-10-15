@@ -6,10 +6,27 @@ import {
   Lock,
   Mail,
   ArrowRight,
-  ShieldCheck,
   AlertCircle,
 } from 'lucide-react'
 import { signInAdmin, isSupabaseConfigured } from '../lib/supabase.ts'
+
+const MAX_ATTEMPTS = 5
+const LOCKOUT_MS = 60_000
+
+function validateEmail(email: string): string | null {
+  if (!email.trim()) return 'Email wajib diisi.'
+  if (email.trim().length > 254) return 'Email terlalu panjang.'
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!re.test(email.trim())) return 'Format email tidak valid.'
+  return null
+}
+
+function validatePassword(password: string): string | null {
+  if (!password) return 'Kata sandi wajib diisi.'
+  if (password.length < 6) return 'Kata sandi minimal 6 karakter.'
+  if (password.length > 128) return 'Kata sandi terlalu panjang.'
+  return null
+}
 
 export default function Login() {
   const navigate = useNavigate()
@@ -19,21 +36,51 @@ export default function Login() {
   const [rememberMe, setRememberMe] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({})
+  const [attempts, setAttempts] = useState(0)
+  const [lockedUntil, setLockedUntil] = useState(0)
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    setIsLoading(true)
     setErrorMessage(null)
+    setFieldErrors({})
+
+    // Rate limit: lockout setelah MAX_ATTEMPTS gagal
+    const now = Date.now()
+    if (lockedUntil > now) {
+      const secsLeft = Math.ceil((lockedUntil - now) / 1000)
+      setErrorMessage(`Terlalu banyak percobaan. Coba lagi dalam ${secsLeft} detik.`)
+      return
+    }
+
+    // Validasi client-side
+    const emailErr = validateEmail(email)
+    const passErr = validatePassword(password)
+    if (emailErr || passErr) {
+      setFieldErrors({ email: emailErr ?? undefined, password: passErr ?? undefined })
+      return
+    }
+
+    setIsLoading(true)
 
     try {
       const { error } = await signInAdmin(email, password)
 
       if (error) {
-        setErrorMessage(error.message)
+        const newAttempts = attempts + 1
+        setAttempts(newAttempts)
+        if (newAttempts >= MAX_ATTEMPTS) {
+          setLockedUntil(Date.now() + LOCKOUT_MS)
+          setAttempts(0)
+          setErrorMessage(`Terlalu banyak percobaan gagal. Akun dikunci selama ${LOCKOUT_MS / 1000} detik.`)
+        } else {
+          setErrorMessage(error.message)
+        }
         setIsLoading(false)
         return
       }
 
+      setAttempts(0)
       setIsLoading(false)
       navigate('/dashboard')
     } catch (err: any) {
@@ -71,7 +118,6 @@ export default function Login() {
             alt="Logo"
             className="h-14 w-auto max-w-[200px] object-contain"
             onError={(e) => {
-              // Menampilkan visual placeholder jika file asset belum dimasukkan
               e.currentTarget.onerror = null
               e.currentTarget.src =
                 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="180" height="52" viewBox="0 0 180 52" fill="none"><rect width="180" height="52" rx="12" fill="%230b0f19" stroke="%23334155" stroke-dasharray="5 5"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="%2364748b" font-size="12" font-weight="500" font-family="sans-serif">Placeholder Logo</text></svg>'
@@ -113,11 +159,14 @@ export default function Login() {
                 type="email"
                 required
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => { setEmail(e.target.value); setFieldErrors(p => ({ ...p, email: undefined })) }}
                 placeholder="dedejuniarputra00@gmail.com"
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/60 py-3 pl-10 pr-4 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700"
+                className={`w-full rounded-xl border ${fieldErrors.email ? 'border-rose-500/60' : 'border-slate-800'} bg-slate-950/60 py-3 pl-10 pr-4 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700`}
               />
             </div>
+            {fieldErrors.email && (
+              <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.email}</p>
+            )}
           </div>
 
           {/* Password input */}
@@ -145,9 +194,9 @@ export default function Login() {
                 type={showPassword ? 'text' : 'password'}
                 required
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => { setPassword(e.target.value); setFieldErrors(p => ({ ...p, password: undefined })) }}
                 placeholder="••••••••"
-                className="w-full rounded-xl border border-slate-800 bg-slate-950/60 py-3 pl-10 pr-11 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700"
+                className={`w-full rounded-xl border ${fieldErrors.password ? 'border-rose-500/60' : 'border-slate-800'} bg-slate-950/60 py-3 pl-10 pr-11 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700`}
               />
               <button
                 type="button"
@@ -163,6 +212,9 @@ export default function Login() {
                 )}
               </button>
             </div>
+            {fieldErrors.password && (
+              <p className="text-[11px] text-rose-400 mt-1">{fieldErrors.password}</p>
+            )}
           </div>
 
           {/* Remember me */}
@@ -196,12 +248,6 @@ export default function Login() {
             )}
           </button>
         </form>
-
-        {/* Security badge at bottom of card */}
-        <div className="mt-8 pt-6 border-t border-slate-800/60 flex items-center justify-center gap-1.5 text-slate-500 text-[11px]">
-          <ShieldCheck className="h-3.5 w-3.5 text-indigo-400/80" />
-          <span>Koneksi aman dengan enkripsi SSL 256-bit</span>
-        </div>
       </div>
 
       {/* Footer copyright */}

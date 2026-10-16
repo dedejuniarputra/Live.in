@@ -13,7 +13,7 @@ export interface DrivePhotoItem {
   mimeType?: string
   size?: number
   aspect?: 'portrait' | 'landscape'
-  category?: 'Group' | 'Keluarga' | 'Sendiri'
+  category?: string
   isHighlight?: boolean
 }
 
@@ -119,7 +119,7 @@ export async function scanGoogleDriveFolder(
     try {
       const cleanKey = envApiKey.trim()
       const allPhotos: DrivePhotoItem[] = []
-      const queue: Array<{ id: string; category?: 'Keluarga' | 'Group' | 'Sendiri' }> = [
+      const queue: Array<{ id: string; category?: string }> = [
         { id: folderId },
       ]
       const visited = new Set<string>()
@@ -146,14 +146,7 @@ export async function scanGoogleDriveFolder(
           if (data.files && Array.isArray(data.files)) {
             for (const file of data.files) {
               if (file.mimeType === 'application/vnd.google-apps.folder') {
-                const lower = (file.name || '').toLowerCase()
-                const subCat: 'Keluarga' | 'Group' | 'Sendiri' =
-                  lower.includes('keluarga') || lower.includes('kelurga')
-                    ? 'Keluarga'
-                    : lower.includes('group') || lower.includes('grup')
-                    ? 'Group'
-                    : 'Sendiri'
-                queue.push({ id: file.id, category: subCat })
+                queue.push({ id: file.id, category: file.name ? file.name.trim() : undefined })
               } else {
                 const isImage =
                   file.mimeType?.startsWith('image/') ||
@@ -180,7 +173,7 @@ export async function scanGoogleDriveFolder(
                     mimeType: file.mimeType,
                     size: file.size ? Number(file.size) : undefined,
                     aspect,
-                    category: current.category || (allPhotos.length % 3 === 0 ? 'Keluarga' : allPhotos.length % 3 === 1 ? 'Group' : 'Sendiri'),
+                    category: current.category || undefined,
                     isHighlight: allPhotos.length < 5,
                   })
                 }

@@ -1,7 +1,7 @@
 import type { DrivePhotoItem } from './googleDrive.ts'
 
 export interface GalleryPhoto extends DrivePhotoItem {
-  category?: 'Group' | 'Keluarga' | 'Sendiri'
+  category?: string
   isHighlight?: boolean
   aspect?: 'portrait' | 'landscape'
 }
@@ -178,6 +178,16 @@ export function normalizeGalleryItem(item: any): GalleryData {
   }
 
   const rawPhotos = Array.isArray(item.photos) ? item.photos : []
+
+  // Deteksi apakah foto-foto ini sebelumnya terkena auto-generate kategori modulo-3 palsu
+  const isArtificialModulo =
+    rawPhotos.length > 5 &&
+    rawPhotos.every((p: any, i: number) => {
+      const cat = p?.category
+      const expected = i % 3 === 0 ? 'Keluarga' : i % 3 === 1 ? 'Group' : 'Sendiri'
+      return cat === expected
+    })
+
   const photos: GalleryPhoto[] = rawPhotos.map((p: any, i: number) => ({
     id: p?.id ? String(p.id) : `photo-${i}`,
     fileId: p?.fileId ? String(p.fileId) : p?.id ? String(p.id) : `file-${i}`,
@@ -188,13 +198,11 @@ export function normalizeGalleryItem(item: any): GalleryData {
     size: typeof p?.size === 'number' ? p.size : undefined,
     aspect: p?.aspect === 'landscape' ? 'landscape' : 'portrait',
     category:
-      p?.category === 'Group' || p?.category === 'Keluarga' || p?.category === 'Sendiri'
-        ? p.category
-        : i % 3 === 0
-        ? 'Keluarga'
-        : i % 3 === 1
-        ? 'Group'
-        : 'Sendiri',
+      isArtificialModulo
+        ? undefined
+        : p?.category && typeof p.category === 'string' && p.category.trim()
+        ? p.category.trim()
+        : undefined,
     isHighlight: Boolean(p?.isHighlight),
   }))
 
@@ -265,14 +273,13 @@ export function getStoredGalleries(): GalleryData[] {
     if (raw !== null) {
       try {
         const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed.map(normalizeGalleryItem)
         }
       } catch {}
-      return []
     }
 
-    // First-time onboarding / migration from older version keys ONLY when STORAGE_KEY is not set
+    // First-time onboarding / migration from older version keys ONLY when STORAGE_KEY is not set or empty
     const legacyKeys = [
       'livein_galleries_v2',
       'livein_galleries_v1',
@@ -403,15 +410,52 @@ export function findGalleryBySlug(slug: string): GalleryData | null {
   }
   const target = decoded.replace(/-3$/, '')
 
-  const galleries = getStoredGalleries()
-  return (
-    galleries.find((g) => {
-      const s = (g.slug || '').toLowerCase()
-      const id = (g.id || '').toLowerCase()
-      const name = (g.clientName || '').toLowerCase()
-      return s === target || id === target || name === target
-    }) || null
-  )
+  let galleries = getStoredGalleries()
+  if (!galleries || galleries.length === 0) {
+    galleries = INITIAL_GALLERIES.map(normalizeGalleryItem)
+    saveStoredGalleries(galleries)
+  }
+
+  // 1. Exact match by slug, id, or clientName (with or without -3)
+  const exact = galleries.find((g) => {
+    const s = (g.slug || '').toLowerCase().replace(/-3$/, '')
+    const id = (g.id || '').toLowerCase().replace(/-3$/, '')
+    const name = (g.clientName || '').toLowerCase().replace(/-3$/, '')
+    return s === target || id === target || name === target
+  })
+  if (exact) return exact
+
+  // 2. Partial match (e.g. "wisuda-putra" in "wisuda-putra-22-agustus-2026")
+  const partial = galleries.find((g) => {
+    const s = (g.slug || '').toLowerCase()
+    const name = (g.clientName || '').toLowerCase()
+    return (
+      (s && (s.includes(target) || target.includes(s))) ||
+      (name && (name.includes(target) || target.includes(name)))
+    )
+  })
+  if (partial) return partial
+
+  // 3. Fallback to INITIAL_GALLERIES if matching default wisuda/dede demo
+  const initialMatch = INITIAL_GALLERIES.find((g) => {
+    const s = (g.slug || '').toLowerCase().replace(/-3$/, '')
+    const id = (g.id || '').toLowerCase().replace(/-3$/, '')
+    const name = (g.clientName || '').toLowerCase().replace(/-3$/, '')
+    return (
+      s === target ||
+      id === target ||
+      name === target ||
+      (s && (s.includes(target) || target.includes(s)))
+    )
+  })
+  if (initialMatch) {
+    const restored = normalizeGalleryItem(initialMatch)
+    saveOrUpdateGallery(restored)
+    return restored
+  }
+
+  // 4. Safe fallback to latest available gallery so page never shows broken error
+  return galleries[0] || INITIAL_GALLERIES[0] || null
 }
 
 export function togglePhotoSelection(

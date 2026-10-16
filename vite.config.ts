@@ -4,18 +4,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-function getCategoryFromName(name: string, fallbackIndex = 0): 'Keluarga' | 'Group' | 'Sendiri' {
-  const lower = name.toLowerCase()
-  if (lower.includes('keluarga') || lower.includes('kelurga') || lower.includes('family')) {
-    return 'Keluarga'
+function getCategoryFromName(name: string): string | undefined {
+  const trimmed = name.trim()
+  if (!trimmed) return undefined
+  if (/\.(jpe?g|png|webp|heic|raw|cr2|cr3|nef|arw|dng)$/i.test(trimmed)) {
+    return undefined
   }
-  if (lower.includes('group') || lower.includes('grup') || lower.includes('rombongan') || lower.includes('teman')) {
-    return 'Group'
-  }
-  if (lower.includes('sendiri') || lower.includes('solo') || lower.includes('single') || lower.includes('individu')) {
-    return 'Sendiri'
-  }
-  return fallbackIndex % 3 === 0 ? 'Keluarga' : fallbackIndex % 3 === 1 ? 'Group' : 'Sendiri'
+  return trimmed
 }
 
 function driveScannerPlugin(defaultApiKey = ''): Plugin {
@@ -114,7 +109,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
               } catch (_) {}
 
               const allPhotos: any[] = []
-              const queue: Array<{ id: string; category?: 'Keluarga' | 'Group' | 'Sendiri' }> = [
+              const queue: Array<{ id: string; category?: string }> = [
                 { id: folderId },
               ]
               const visitedFolders = new Set<string>()
@@ -148,7 +143,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
                     for (const item of data.files) {
                       if (item.mimeType === 'application/vnd.google-apps.folder') {
                         // Jika item adalah subfolder, masukkan ke antrean dengan kategori sesuai nama folder
-                        const subCat = getCategoryFromName(item.name || '', queue.length)
+                        const subCat = getCategoryFromName(item.name || '')
                         queue.push({ id: item.id, category: subCat })
                       } else {
                         // Cek apakah item adalah file foto
@@ -177,7 +172,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
                             mimeType: item.mimeType,
                             size: item.size ? Number(item.size) : undefined,
                             aspect,
-                            category: current.category || getCategoryFromName(item.name || '', allPhotos.length),
+                            category: current.category || undefined,
                             isHighlight: allPhotos.length < 5,
                           })
                         }
@@ -201,7 +196,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
 
           // 2. Prioritas 2: Coba ekstrak file dari embeddedfolderview Google Drive publik (rekursif membaca subfolder)
           const allEmbedPhotos: any[] = []
-          const embedQueue: Array<{ id: string; category?: 'Keluarga' | 'Group' | 'Sendiri' }> = [
+          const embedQueue: Array<{ id: string; category?: string }> = [
             { id: folderId },
           ]
           const visitedEmbed = new Set<string>()
@@ -251,7 +246,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
 
               if (isFolder) {
                 // Masukkan subfolder ke antrean untuk dipindai isinya!
-                const subCat = getCategoryFromName(entryTitle, embedQueue.length)
+                const subCat = getCategoryFromName(entryTitle)
                 embedQueue.push({ id: entryId, category: subCat })
               } else {
                 allEmbedPhotos.push({
@@ -261,7 +256,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
                   url: `https://lh3.googleusercontent.com/d/${entryId}`,
                   thumbnailUrl: `https://drive.google.com/thumbnail?id=${entryId}&sz=w800`,
                   aspect: allEmbedPhotos.length % 3 === 0 ? 'landscape' : 'portrait',
-                  category: currentFolder.category || getCategoryFromName(entryTitle, allEmbedPhotos.length),
+                  category: currentFolder.category || undefined,
                   isHighlight: allEmbedPhotos.length < 5,
                 })
               }
@@ -283,7 +278,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
                     url: `https://lh3.googleusercontent.com/d/${fileId}`,
                     thumbnailUrl: `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`,
                     aspect: allEmbedPhotos.length % 3 === 0 ? 'landscape' : 'portrait',
-                    category: currentFolder.category || (allEmbedPhotos.length % 3 === 0 ? 'Keluarga' : allEmbedPhotos.length % 3 === 1 ? 'Group' : 'Sendiri'),
+                    category: currentFolder.category || undefined,
                     isHighlight: allEmbedPhotos.length < 5,
                   })
                 }

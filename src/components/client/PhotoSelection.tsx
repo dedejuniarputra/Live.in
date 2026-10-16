@@ -16,10 +16,15 @@ import {
   ChevronsLeftRight,
   Share2,
   Download,
+  Grid2X2,
+  Grid3X3,
+  Columns2,
 } from 'lucide-react'
 import {
   findGalleryBySlug,
   togglePhotoSelection,
+  getStoredGalleries,
+  INITIAL_GALLERIES,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -27,18 +32,41 @@ import {
 export default function PhotoSelection() {
   const { slug } = useParams<{ slug: string }>()
   const location = useLocation()
-  const [gallery, setGallery] = useState<GalleryData | null>(null)
+  const [gallery, setGallery] = useState<GalleryData | null>(() => {
+    try {
+      let targetSlug = slug ? decodeURIComponent(slug).trim() : ''
+      if (!targetSlug) {
+        const segments = window.location.pathname.split('/').filter(Boolean)
+        const last = segments[segments.length - 1]
+        if (last && !last.startsWith('livesotory') && !last.startsWith('livesostory')) {
+          targetSlug = decodeURIComponent(last).trim()
+        }
+      }
+      return (
+        findGalleryBySlug(targetSlug || 'wisuda-putra-22-agustus-2026') ||
+        getStoredGalleries()[0] ||
+        INITIAL_GALLERIES[0] ||
+        null
+      )
+    } catch {
+      return INITIAL_GALLERIES[0] || null
+    }
+  })
 
-  // Primary filter: 'semua' | 'highlight' | 'terpilih' | 'swipe'
-  const [mainTab, setMainTab] = useState<'semua' | 'highlight' | 'terpilih' | 'swipe'>('semua')
-  // Secondary category filter: 'semua' | 'group' | 'keluarga' | 'sendiri'
-  const [subCategory, setSubCategory] = useState<'semua' | 'group' | 'keluarga' | 'sendiri'>('semua')
+  // Primary filter: 'semua' | 'terpilih'
+  const [mainTab, setMainTab] = useState<'semua' | 'terpilih'>('semua')
+  // Secondary category filter: 'semua' | string
+  const [subCategory, setSubCategory] = useState<string>('semua')
+
+  // Grid Density Size: 'normal' | 'large'
+  const [gridSize, setGridSize] = useState<'normal' | 'large'>('normal')
 
   // Search & Lightbox
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [activePhoto, setActivePhoto] = useState<GalleryPhoto | null>(null)
   const [activePhotoIndex, setActivePhotoIndex] = useState<number>(0)
+  const [isCompareMode, setIsCompareMode] = useState<boolean>(false)
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false)
   const [clientNotes, setClientNotes] = useState('')
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -99,10 +127,14 @@ export default function PhotoSelection() {
   const selectedCount = selectedPhotoIds.length
   const maxPhotos = gallery?.maxPhotos || 60
 
-  // Counts for subcategories
-  const countGroup = photos.filter((p) => p && p.category === 'Group').length
-  const countKeluarga = photos.filter((p) => p && p.category === 'Keluarga').length
-  const countSendiri = photos.filter((p) => p && p.category === 'Sendiri').length
+  // Extract unique available categories dynamically
+  const availableCategories = Array.from(
+    new Set(
+      photos
+        .map((p) => (p && p.category ? String(p.category).trim() : ''))
+        .filter((cat): cat is string => Boolean(cat && cat.length > 0))
+    )
+  )
   const totalCount = photos.length
 
   // Filtering photos
@@ -116,13 +148,12 @@ export default function PhotoSelection() {
     }
 
     // Main tab filter
-    if (mainTab === 'highlight' && !p.isHighlight) return false
     if (mainTab === 'terpilih' && !selectedPhotoIds.includes(p.id)) return false
 
-    // Subcategory filter
-    if (subCategory === 'group' && p.category !== 'Group') return false
-    if (subCategory === 'keluarga' && p.category !== 'Keluarga') return false
-    if (subCategory === 'sendiri' && p.category !== 'Sendiri') return false
+    // Subcategory filter (only if multiple categories actually exist)
+    if (availableCategories.length > 1 && subCategory !== 'semua') {
+      if ((p.category || '').trim() !== subCategory) return false
+    }
 
     return true
   })
@@ -147,7 +178,16 @@ export default function PhotoSelection() {
     if (!photo) return
     setActivePhotoIndex(index >= 0 ? index : 0)
     setActivePhoto(photo)
+    setIsCompareMode(false)
   }
+
+  const closeLightbox = () => {
+    setActivePhoto(null)
+    setIsCompareMode(false)
+  }
+
+  const compareIndex = filteredPhotos.length > 0 ? (activePhotoIndex + 1) % filteredPhotos.length : 0
+  const comparePhoto = filteredPhotos[compareIndex]
 
   const nextPhoto = () => {
     if (!filteredPhotos || filteredPhotos.length === 0) return
@@ -190,21 +230,35 @@ Terima kasih!`
     }
   }
 
-  // Keyboard navigation for Lightbox
+  // Keyboard navigation & shortcuts for Lightbox
   useEffect(() => {
     if (!activePhoto || filteredPhotos.length === 0) return
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore shortcuts if client is typing inside an input or textarea
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return
+
       if (e.key === 'Escape') {
-        setActivePhoto(null)
+        if (isCompareMode) {
+          setIsCompareMode(false)
+        } else {
+          closeLightbox()
+        }
       } else if (e.key === 'ArrowLeft') {
         prevPhoto()
       } else if (e.key === 'ArrowRight') {
         nextPhoto()
+      } else if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault()
+        handleToggle(activePhoto)
+      } else if (e.key === 'c' || e.key === 'C') {
+        if (filteredPhotos.length > 1) {
+          setIsCompareMode((prev) => !prev)
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activePhoto, activePhotoIndex, filteredPhotos])
+  }, [activePhoto, activePhotoIndex, filteredPhotos, isCompareMode])
 
   // Mobile Touch Gestures for Lightbox
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -313,8 +367,8 @@ Terima kasih!`
           <button
             type="button"
             onClick={() => {
-              const fallback = findGalleryBySlug('wisuda-putra-22-agustus-2026')
-              if (fallback) setGallery(fallback)
+              const latest = getStoredGalleries()[0] || INITIAL_GALLERIES[0]
+              if (latest) setGallery(latest)
             }}
             className="rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 px-4 py-2 text-xs font-bold text-slate-950 transition-all cursor-pointer"
           >
@@ -417,23 +471,7 @@ Terima kasih!`
                 <span>Semua</span>
               </button>
 
-              {/* Tab 2: Highlight */}
-              <button
-                type="button"
-                onClick={() => setMainTab('highlight')}
-                className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-                  mainTab === 'highlight'
-                    ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold shadow-md'
-                    : isDarkMode
-                    ? 'border border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
-                    : 'border border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-                <span>Highlight</span>
-              </button>
-
-              {/* Tab 3: Terpilih */}
+              {/* Tab 2: Terpilih */}
               <button
                 type="button"
                 onClick={() => setMainTab('terpilih')}
@@ -447,33 +485,58 @@ Terima kasih!`
               >
                 <Check className="h-3.5 w-3.5" />
                 <span>Terpilih</span>
-              </button>
-
-              {/* Tab 4: Swipe */}
-              <button
-                type="button"
-                onClick={() => {
-                  setMainTab('swipe')
-                  if (filteredPhotos.length > 0) {
-                    openLightbox(filteredPhotos[0], 0)
-                  }
-                }}
-                className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
-                  mainTab === 'swipe'
-                    ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold shadow-md'
-                    : isDarkMode
-                    ? 'border border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
-                    : 'border border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-              >
-                <ChevronsLeftRight className="h-3.5 w-3.5" />
-                <span>Swipe</span>
+                {selectedCount > 0 && (
+                  <span
+                    className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                      mainTab === 'terpilih'
+                        ? 'bg-slate-950 text-[#C9A26A]'
+                        : 'bg-[#C9A26A]/20 text-[#C9A26A]'
+                    }`}
+                  >
+                    {selectedCount}
+                  </span>
+                )}
               </button>
             </div>
 
-            {/* Divider and Right Tools (Search, Filter, Moon/Sun) */}
+            {/* Right Tools (Mode Swipe, Grid Size Toggle, Search, Filter, Moon/Sun) */}
             <div className="flex items-center gap-2">
-              <div className={`h-4 w-px mx-1 ${isDarkMode ? 'bg-slate-800' : 'bg-stone-300'}`} />
+              {/* Dedicated Mode Swipe Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (filteredPhotos.length > 0) {
+                    openLightbox(filteredPhotos[0], 0)
+                  } else {
+                    showToast('Tidak ada foto untuk mode swipe')
+                  }
+                }}
+                className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition-all cursor-pointer ${
+                  isDarkMode
+                    ? 'border-slate-800 bg-slate-900/90 text-[#E8C28A] hover:bg-slate-800 hover:border-[#C9A26A]/50'
+                    : 'border-stone-200 bg-white text-[#9C7844] hover:bg-stone-50'
+                }`}
+                title="Mode Swipe / Review Layar Penuh"
+              >
+                <ChevronsLeftRight className="h-3.5 w-3.5 text-[#C9A26A]" />
+                <span className="hidden sm:inline">Mode Swipe</span>
+              </button>
+
+              <div className={`h-4 w-px mx-0.5 ${isDarkMode ? 'bg-slate-800' : 'bg-stone-300'}`} />
+
+              {/* Grid Density Toggle */}
+              <button
+                type="button"
+                onClick={() => setGridSize((prev) => (prev === 'normal' ? 'large' : 'normal'))}
+                className={`flex h-8 w-8 items-center justify-center rounded-full border transition-colors cursor-pointer ${
+                  isDarkMode
+                    ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800'
+                    : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                }`}
+                title={gridSize === 'normal' ? 'Tampilan Grid Besar (Fokus Wajah)' : 'Tampilan Grid Standar'}
+              >
+                {gridSize === 'normal' ? <Grid2X2 className="h-3.5 w-3.5" /> : <Grid3X3 className="h-3.5 w-3.5" />}
+              </button>
 
               {/* Search Toggle */}
               <button
@@ -537,72 +600,49 @@ Terima kasih!`
             </div>
           )}
 
-          {/* Navigation Bar 2: Sub-Categories */}
-          <div className="mt-3.5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSubCategory('semua')}
-              className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                subCategory === 'semua'
-                  ? isDarkMode
-                    ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
-                    : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
-                  : isDarkMode
-                  ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
-                  : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
-              }`}
-            >
-              Semua <span className="text-[11px] opacity-75">{totalCount}</span>
-            </button>
+          {/* Navigation Bar 2: Sub-Categories (Hanya tampil jika Drive memiliki lebih dari 1 subfolder/kategori) */}
+          {availableCategories.length > 1 && (
+            <div className="mt-3.5 flex flex-wrap items-center gap-2 animate-in fade-in">
+              <button
+                type="button"
+                onClick={() => setSubCategory('semua')}
+                className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
+                  subCategory === 'semua'
+                    ? isDarkMode
+                      ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
+                      : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
+                    : isDarkMode
+                    ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
+                    : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
+                }`}
+              >
+                Semua <span className="text-[11px] opacity-75">({totalCount})</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setSubCategory('group')}
-              className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                subCategory === 'group'
-                  ? isDarkMode
-                    ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
-                    : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
-                  : isDarkMode
-                  ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
-                  : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
-              }`}
-            >
-              Group <span className="text-[11px] opacity-75">{countGroup}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubCategory('keluarga')}
-              className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                subCategory === 'keluarga'
-                  ? isDarkMode
-                    ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
-                    : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
-                  : isDarkMode
-                  ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
-                  : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
-              }`}
-            >
-              Keluarga <span className="text-[11px] opacity-75">{countKeluarga}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSubCategory('sendiri')}
-              className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                subCategory === 'sendiri'
-                  ? isDarkMode
-                    ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
-                    : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
-                  : isDarkMode
-                  ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
-                  : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
-              }`}
-            >
-              Sendiri <span className="text-[11px] opacity-75">{countSendiri}</span>
-            </button>
-          </div>
+              {availableCategories.map((cat) => {
+                const count = photos.filter((p) => p && (p.category || '').trim() === cat).length
+                const isActive = subCategory === cat
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setSubCategory(cat)}
+                    className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
+                      isActive
+                        ? isDarkMode
+                          ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
+                          : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
+                        : isDarkMode
+                        ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
+                        : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
+                    }`}
+                  >
+                    {cat} <span className="text-[11px] opacity-75">({count})</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       </header>
 
@@ -620,15 +660,17 @@ Terima kasih!`
               if (!photo) return null
               const isSelected = selectedPhotoIds.includes(photo.id)
               const isLandscape = photo.aspect === 'landscape'
+              const heightClass =
+                gridSize === 'large'
+                  ? 'h-[230px] sm:h-[300px] md:h-[360px]'
+                  : 'h-[175px] sm:h-[220px] md:h-[250px]'
 
               return (
                 <div
                   key={photo.id}
                   onClick={() => openLightbox(photo, index)}
-                  className={`group relative overflow-hidden rounded-xl cursor-pointer transition-all ${
-                    isLandscape
-                      ? 'h-[175px] sm:h-[220px] md:h-[250px] aspect-[4/3] grow'
-                      : 'h-[175px] sm:h-[220px] md:h-[250px] aspect-[3/4] grow'
+                  className={`group relative overflow-hidden rounded-xl cursor-pointer transition-all ${heightClass} ${
+                    isLandscape ? 'aspect-[4/3] grow' : 'aspect-[3/4] grow'
                   } ${
                     isDarkMode
                       ? 'bg-slate-900 border border-slate-800/80'
@@ -665,44 +707,37 @@ Terima kasih!`
 
                   {/* Subtle dark overlay when touched/hovered */}
                   <div
-                    className={`absolute inset-0 bg-black/25 transition-opacity duration-200 pointer-events-none ${
+                    className={`absolute inset-0 bg-black/20 transition-opacity duration-200 pointer-events-none ${
                       isSelected
-                        ? 'opacity-30'
+                        ? 'opacity-25'
                         : 'opacity-0 group-hover:opacity-100 group-active:opacity-100'
                     }`}
                   />
 
-                  {/* Selected Indicator Badge at Top-Right */}
-                  {isSelected && (
-                    <div className="absolute top-2 right-2 flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-full bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold shadow-md pointer-events-none z-10">
-                      <Check className="h-3 w-3 sm:h-3.5 sm:w-3.5 stroke-[3]" />
-                    </div>
-                  )}
-
-                  {/* Center Selection Button (Tampil saat disentuh / di-hover) */}
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                  {/* Top-Right Circular Checkbox Button (Affordance always visible, faces never blocked) */}
+                  <div className="absolute top-2 right-2 z-20">
                     <button
                       type="button"
                       onClick={(e) => handleToggle(photo, e)}
-                      className={`pointer-events-auto flex items-center gap-1.5 sm:gap-2 px-3.5 py-2 sm:px-4 sm:py-2 rounded-full font-bold text-xs tracking-wide transition-all duration-200 cursor-pointer shadow-2xl backdrop-blur-md active:scale-95 touch-manipulation ${
+                      className={`h-7 w-7 sm:h-8 sm:w-8 flex items-center justify-center rounded-full transition-all duration-200 cursor-pointer shadow-md active:scale-90 ${
                         isSelected
-                          ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold shadow-[#C9A26A]/40 scale-100 opacity-100 ring-2 ring-white/30'
-                          : 'bg-black/65 hover:bg-black/85 text-white border border-white/30 opacity-0 group-hover:opacity-100 group-active:opacity-100 scale-90 group-hover:scale-100 group-active:scale-100'
+                          ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 ring-2 ring-white/70 shadow-lg scale-100'
+                          : 'border-2 border-white/75 bg-black/40 text-transparent hover:text-white/80 hover:border-white hover:bg-black/60 opacity-80 group-hover:opacity-100 hover:scale-105'
                       }`}
                       title={isSelected ? 'Batalkan pilihan foto' : 'Pilih foto ini'}
                     >
-                      <Check
-                        className={`h-4 w-4 ${
-                          isSelected ? 'stroke-[3]' : 'stroke-[2.5]'
-                        }`}
-                      />
-                      <span>{isSelected ? 'Terpilih' : 'Pilih'}</span>
+                      <Check className={`h-4 w-4 ${isSelected ? 'stroke-[3]' : 'stroke-[2.5]'}`} />
                     </button>
                   </div>
 
-                  {/* Photo Code Overlay on Hover / Touch */}
-                  <div className="pointer-events-none absolute bottom-1.5 left-1.5 opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity bg-black/70 text-white font-mono text-[9px] px-1.5 py-0.5 rounded-sm">
-                    {photo.filename}
+                  {/* Photo Code & Hint Overlay on Hover */}
+                  <div className="pointer-events-none absolute bottom-0 inset-x-0 p-2 opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity flex items-center justify-between bg-gradient-to-t from-black/80 via-black/30 to-transparent">
+                    <span className="font-mono text-[10px] text-white/90 truncate max-w-[70%] bg-black/50 px-1.5 py-0.5 rounded">
+                      {photo.filename}
+                    </span>
+                    <span className="text-[10px] text-white/80 bg-black/50 px-1.5 py-0.5 rounded">
+                      Perbesar
+                    </span>
                   </div>
                 </div>
               )
@@ -719,6 +754,18 @@ Terima kasih!`
             : 'border-stone-200 bg-white/95 text-stone-900'
         }`}
       >
+        {/* Visual Progress Bar along top edge */}
+        <div className="absolute top-0 inset-x-0 h-1 bg-slate-800/60 overflow-hidden">
+          <div
+            className={`h-full transition-all duration-300 ${
+              selectedCount >= maxPhotos
+                ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
+                : 'bg-gradient-to-r from-[#9C7844] via-[#C9A26A] to-[#E8C28A]'
+            }`}
+            style={{ width: `${Math.min(100, (selectedCount / maxPhotos) * 100)}%` }}
+          />
+        </div>
+
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
           <div className="flex items-center gap-2 sm:gap-3">
             <span className={`text-xs font-semibold ${isDarkMode ? 'text-slate-400' : 'text-stone-500'}`}>
@@ -727,9 +774,26 @@ Terima kasih!`
             <span className="text-sm font-bold">
               <strong className={isDarkMode ? 'text-[#E8C28A]' : 'text-[#9C7844]'}>{selectedCount}</strong> / {maxPhotos} Foto
             </span>
-            {selectedCount >= maxPhotos && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-medium text-emerald-400">
+
+            {/* Dynamic Status Badges */}
+            {selectedCount === 0 && (
+              <span className="hidden sm:inline-flex text-xs text-slate-500">
+                • Belum ada foto dipilih
+              </span>
+            )}
+            {selectedCount > 0 && selectedCount < maxPhotos && (
+              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-medium text-amber-300/90">
+                • Kurang {maxPhotos - selectedCount} foto lagi
+              </span>
+            )}
+            {selectedCount === maxPhotos && (
+              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold text-emerald-400">
                 <CheckCircle2 className="h-3.5 w-3.5" /> Kuota Terpenuhi
+              </span>
+            )}
+            {selectedCount > maxPhotos && (
+              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold text-rose-400">
+                • Kelebihan {selectedCount - maxPhotos} foto
               </span>
             )}
           </div>
@@ -750,7 +814,11 @@ Terima kasih!`
               type="button"
               onClick={() => setIsSubmitModalOpen(true)}
               disabled={selectedCount === 0}
-              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 px-4 py-2 text-xs sm:text-sm font-bold text-slate-950 shadow-md transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                selectedCount > 0
+                  ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 text-slate-950 shadow-lg shadow-[#C9A26A]/20 active:scale-95'
+                  : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
+              }`}
             >
               <Send className="h-3.5 w-3.5" />
               <span>Selesai Memilih</span>
@@ -759,18 +827,35 @@ Terima kasih!`
         </div>
       </div>
 
-      {/* Lightbox / Modal (Exact Matching Contoh Gambar 1) */}
+      {/* Lightbox / Modal */}
       {activePhoto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none animate-in fade-in">
           {/* Top Bar: Left Counter & Right Action Buttons */}
           <div className="absolute top-0 inset-x-0 z-50 flex items-center justify-between p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent pointer-events-none">
-            {/* Top Left: Counter (e.g. 2 / 80) */}
+            {/* Top Left: Counter */}
             <div className="pointer-events-auto text-sm sm:text-base font-normal tracking-wide text-white/90">
               {activePhotoIndex + 1} / {filteredPhotos.length}
             </div>
 
-            {/* Top Right: Share, Download, Close */}
-            <div className="pointer-events-auto flex items-center gap-2.5 sm:gap-3">
+            {/* Top Right: Compare, Share, Download, Close */}
+            <div className="pointer-events-auto flex items-center gap-2 sm:gap-3">
+              {/* Compare Mode Toggle */}
+              {filteredPhotos.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setIsCompareMode((prev) => !prev)}
+                  className={`flex items-center gap-1.5 h-9 sm:h-10 px-3 rounded-full text-xs font-semibold transition-all cursor-pointer backdrop-blur-md border shadow-lg ${
+                    isCompareMode
+                      ? 'bg-[#C9A26A] text-slate-950 border-[#C9A26A] font-bold ring-2 ring-white/50'
+                      : 'bg-white/10 hover:bg-white/20 text-white border-white/10'
+                  }`}
+                  title="Bandingkan 2 Foto Berdampingan (Shortcut: Tekan C)"
+                >
+                  <Columns2 className="h-4 w-4" />
+                  <span className="hidden sm:inline">Bandingkan</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => handleSharePhoto(activePhoto)}
@@ -798,9 +883,9 @@ Terima kasih!`
 
               <button
                 type="button"
-                onClick={() => setActivePhoto(null)}
+                onClick={closeLightbox}
                 className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
-                title="Tutup"
+                title="Tutup (Esc)"
               >
                 <X className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
               </button>
@@ -812,7 +897,7 @@ Terima kasih!`
             type="button"
             onClick={prevPhoto}
             className="absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 z-50 flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-white/10 hover:bg-white/25 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
-            title="Foto Sebelumnya"
+            title="Foto Sebelumnya (Panah Kiri)"
           >
             <ChevronLeft className="h-5 w-5 sm:h-6 sm:w-6" />
           </button>
@@ -822,67 +907,128 @@ Terima kasih!`
             type="button"
             onClick={nextPhoto}
             className="absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 z-50 flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-white/10 hover:bg-white/25 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
-            title="Foto Selanjutnya"
+            title="Foto Selanjutnya (Panah Kanan)"
           >
             <ChevronRight className="h-5 w-5 sm:h-6 sm:w-6" />
           </button>
 
-          {/* Center Main Photo Container */}
+          {/* Center Main Photo Container (Supports Single View and Split Compare View) */}
           <div
             className="relative flex h-full w-full items-center justify-center p-3 sm:p-8"
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
-            <img
-              src={activePhoto.url || activePhoto.thumbnailUrl || (activePhoto.fileId ? `/api/drive-image?id=${activePhoto.fileId}&sz=1600` : '')}
-              alt={activePhoto.filename}
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                const fileId = activePhoto.fileId || activePhoto.id
-                const target = e.currentTarget
-                if (!target.dataset.triedProxy && fileId) {
-                  target.dataset.triedProxy = 'true'
-                  target.src = `/api/drive-image?id=${fileId}&sz=1600`
-                } else if (!target.dataset.triedDirect && fileId) {
-                  target.dataset.triedDirect = 'true'
-                  target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`
-                } else if (activePhoto.thumbnailUrl && target.src !== activePhoto.thumbnailUrl) {
-                  target.src = activePhoto.thumbnailUrl
-                }
-              }}
-              className="max-h-[82vh] sm:max-h-[88vh] max-w-[94vw] w-auto h-auto object-contain rounded-lg shadow-2xl transition-transform duration-200"
-            />
+            {isCompareMode && comparePhoto ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full w-full max-w-6xl items-center justify-center p-2 sm:p-4">
+                {/* Photo A */}
+                <div className="relative flex flex-col items-center justify-center h-full max-h-[75vh]">
+                  <img
+                    src={activePhoto.url || activePhoto.thumbnailUrl || (activePhoto.fileId ? `/api/drive-image?id=${activePhoto.fileId}&sz=1200` : '')}
+                    alt={activePhoto.filename}
+                    className="max-h-[60vh] sm:max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-xl"
+                  />
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <span className="text-[11px] font-mono text-white/80 bg-black/60 px-2 py-0.5 rounded">
+                      A: {activePhoto.filename}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggle(activePhoto)}
+                      className={`flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs font-bold transition-all cursor-pointer shadow-md ${
+                        selectedPhotoIds.includes(activePhoto.id)
+                          ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950'
+                          : 'bg-white/15 hover:bg-white/25 text-white border border-white/20'
+                      }`}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      <span>{selectedPhotoIds.includes(activePhoto.id) ? 'Terpilih' : 'Pilih Foto A'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Photo B */}
+                <div className="relative flex flex-col items-center justify-center h-full max-h-[75vh]">
+                  <img
+                    src={comparePhoto.url || comparePhoto.thumbnailUrl || (comparePhoto.fileId ? `/api/drive-image?id=${comparePhoto.fileId}&sz=1200` : '')}
+                    alt={comparePhoto.filename}
+                    className="max-h-[60vh] sm:max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-xl"
+                  />
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <span className="text-[11px] font-mono text-white/80 bg-black/60 px-2 py-0.5 rounded">
+                      B: {comparePhoto.filename}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggle(comparePhoto)}
+                      className={`flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs font-bold transition-all cursor-pointer shadow-md ${
+                        selectedPhotoIds.includes(comparePhoto.id)
+                          ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950'
+                          : 'bg-white/15 hover:bg-white/25 text-white border border-white/20'
+                      }`}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      <span>{selectedPhotoIds.includes(comparePhoto.id) ? 'Terpilih' : 'Pilih Foto B'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <img
+                src={activePhoto.url || activePhoto.thumbnailUrl || (activePhoto.fileId ? `/api/drive-image?id=${activePhoto.fileId}&sz=1600` : '')}
+                alt={activePhoto.filename}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const fileId = activePhoto.fileId || activePhoto.id
+                  const target = e.currentTarget
+                  if (!target.dataset.triedProxy && fileId) {
+                    target.dataset.triedProxy = 'true'
+                    target.src = `/api/drive-image?id=${fileId}&sz=1600`
+                  } else if (!target.dataset.triedDirect && fileId) {
+                    target.dataset.triedDirect = 'true'
+                    target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`
+                  } else if (activePhoto.thumbnailUrl && target.src !== activePhoto.thumbnailUrl) {
+                    target.src = activePhoto.thumbnailUrl
+                  }
+                }}
+                className="max-h-[82vh] sm:max-h-[88vh] max-w-[94vw] w-auto h-auto object-contain rounded-lg shadow-2xl transition-transform duration-200"
+              />
+            )}
           </div>
 
-          {/* Bottom Controls & Gesture Hint (Exact Matching Contoh Gambar 1) */}
+          {/* Bottom Controls & Shortcut Hint */}
           <div className="absolute bottom-0 inset-x-0 z-50 flex flex-col items-center justify-center pb-4 sm:pb-6 pt-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none gap-2">
-            <div className="pointer-events-auto flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => handleToggle(activePhoto)}
-                className={`flex items-center gap-2 rounded-full px-5 py-2 text-xs font-bold transition-all cursor-pointer shadow-lg active:scale-95 ${
-                  selectedPhotoIds.includes(activePhoto.id)
-                    ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 shadow-[#C9A26A]/20'
-                    : 'bg-black/60 hover:bg-black/80 border border-white/20 text-white backdrop-blur-md'
-                }`}
-              >
-                <Check
-                  className={`h-4 w-4 ${
+            {!isCompareMode && (
+              <div className="pointer-events-auto flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleToggle(activePhoto)}
+                  className={`flex items-center gap-2 rounded-full px-5 py-2 text-xs font-bold transition-all cursor-pointer shadow-lg active:scale-95 ${
                     selectedPhotoIds.includes(activePhoto.id)
-                      ? 'stroke-[3]'
-                      : 'stroke-[2]'
+                      ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 shadow-[#C9A26A]/20'
+                      : 'bg-black/60 hover:bg-black/80 border border-white/20 text-white backdrop-blur-md'
                   }`}
-                />
-                <span>
-                  {selectedPhotoIds.includes(activePhoto.id)
-                    ? 'Sudah Terpilih'
-                    : 'Pilih Foto Ini'}
-                </span>
-              </button>
-            </div>
-            <p className="text-[11px] sm:text-xs text-white/50 tracking-wide select-none">
-              Geser untuk pindah • Cubit untuk memperbesar
+                >
+                  <Check
+                    className={`h-4 w-4 ${
+                      selectedPhotoIds.includes(activePhoto.id)
+                        ? 'stroke-[3]'
+                        : 'stroke-[2]'
+                    }`}
+                  />
+                  <span>
+                    {selectedPhotoIds.includes(activePhoto.id)
+                      ? 'Sudah Terpilih'
+                      : 'Pilih Foto Ini'}
+                  </span>
+                </button>
+              </div>
+            )}
+            <p className="text-[11px] sm:text-xs text-white/60 tracking-wide select-none hidden sm:block">
+              Tekan <kbd className="px-1.5 py-0.5 rounded bg-white/15 text-white font-mono text-[10px]">Spasi</kbd> untuk pilih • <kbd className="px-1.5 py-0.5 rounded bg-white/15 text-white font-mono text-[10px]">← / →</kbd> Pindah • <kbd className="px-1.5 py-0.5 rounded bg-white/15 text-white font-mono text-[10px]">C</kbd> Bandingkan • <kbd className="px-1.5 py-0.5 rounded bg-white/15 text-white font-mono text-[10px]">Esc</kbd> Tutup
+            </p>
+            <p className="text-[11px] text-white/50 tracking-wide select-none sm:hidden">
+              Geser untuk pindah • Ketuk tombol untuk memilih
             </p>
           </div>
         </div>

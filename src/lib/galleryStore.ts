@@ -394,74 +394,24 @@ export function deleteGallery(id: string, slug?: string): GalleryData[] {
 }
 
 export function findGalleryBySlug(slug: string): GalleryData | null {
-  const galleries = getStoredGalleries()
-  if (galleries.length === 0) {
-    return INITIAL_GALLERIES[0] || null
-  }
-  if (!slug) return galleries[0]
-
-  const cleanAlphanumeric = (s?: string) =>
-    s ? String(s).toLowerCase().replace(/[^a-z0-9]/g, '') : ''
-
-  // Decode URI component in case URL contains %20 or encoded characters
-  let decodedSlug = ''
+  if (!slug) return null
+  let decoded = ''
   try {
-    decodedSlug = decodeURIComponent(slug).trim()
+    decoded = decodeURIComponent(slug).trim().toLowerCase()
   } catch {
-    decodedSlug = String(slug).trim()
+    decoded = String(slug).trim().toLowerCase()
   }
+  const target = decoded.replace(/-3$/, '')
 
-  const baseSlug = decodedSlug.replace(/-3$/, '').trim()
-  const targetClean = cleanAlphanumeric(baseSlug)
-
-  // 1. Exact raw match (slug, clientName, id)
-  let match = galleries.find((g) => {
-    if (!g) return false
-    const s = String(g.slug || '').toLowerCase()
-    const n = String(g.clientName || '').toLowerCase()
-    const id = String(g.id || '').toLowerCase()
-    const t = baseSlug.toLowerCase()
-    return s === t || n === t || id === t
-  })
-
-  // 2. Alphanumeric match (ignores hyphens, spaces, uppercase, symbols)
-  if (!match && targetClean) {
-    match = galleries.find((g) => {
-      if (!g) return false
-      return (
-        cleanAlphanumeric(g.slug) === targetClean ||
-        cleanAlphanumeric(g.clientName) === targetClean ||
-        cleanAlphanumeric(g.id) === targetClean
-      )
-    })
-  }
-
-  // 3. Substring match
-  if (!match && targetClean) {
-    match = galleries.find((g) => {
-      if (!g) return false
-      const s = cleanAlphanumeric(g.slug)
-      const n = cleanAlphanumeric(g.clientName)
-      return (
-        (s && (s.includes(targetClean) || targetClean.includes(s))) ||
-        (n && (n.includes(targetClean) || targetClean.includes(n)))
-      )
-    })
-  }
-
-  // 4. Keyword fallback (wisuda, putra, dede, wedding)
-  if (!match && targetClean) {
-    if (targetClean.includes('wisuda') || targetClean.includes('putra')) {
-      match = galleries.find((g) => {
-        const s = cleanAlphanumeric(g.slug)
-        const n = cleanAlphanumeric(g.clientName)
-        return s.includes('wisuda') || n.includes('wisuda') || s.includes('putra') || n.includes('putra')
-      })
-    }
-  }
-
-  // 5. Ultimate fallback: Return the latest stored gallery so client NEVER sees an empty screen
-  return match || galleries[0] || INITIAL_GALLERIES[0] || null
+  const galleries = getStoredGalleries()
+  return (
+    galleries.find((g) => {
+      const s = (g.slug || '').toLowerCase()
+      const id = (g.id || '').toLowerCase()
+      const name = (g.clientName || '').toLowerCase()
+      return s === target || id === target || name === target
+    }) || null
+  )
 }
 
 export function togglePhotoSelection(

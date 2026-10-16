@@ -30,7 +30,7 @@ function validatePassword(password: string): string | null {
 
 export default function Login() {
   const navigate = useNavigate()
-  const [email, setEmail] = useState('dedejuniarputra00@gmail.com')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [rememberMe, setRememberMe] = useState(false)
@@ -160,7 +160,7 @@ export default function Login() {
                 required
                 value={email}
                 onChange={(e) => { setEmail(e.target.value); setFieldErrors(p => ({ ...p, email: undefined })) }}
-                placeholder="dedejuniarputra00@gmail.com"
+                placeholder="nama@email.com"
                 className={`w-full rounded-xl border ${fieldErrors.email ? 'border-rose-500/60' : 'border-slate-800'} bg-slate-950/60 py-3 pl-10 pr-4 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700`}
               />
             </div>

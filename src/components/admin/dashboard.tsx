@@ -11,7 +11,6 @@ import {
   RefreshCw,
   Copy,
   CloudDownload,
-  CloudOff,
   Pencil,
   Settings,
   Clock,
@@ -30,7 +29,6 @@ import {
   getStoredGalleries,
   saveOrUpdateGallery,
   updateGallery,
-  toggleGalleryDownload,
   deleteGallery,
   type GalleryData,
 } from '../../lib/galleryStore.ts'
@@ -124,11 +122,10 @@ Selamat menikmati momennya`
 
   // Form states
   const [driveLink, setDriveLink] = useState('')
-  const [maxPhotos, setMaxPhotos] = useState('60')
+  const [maxPhotos, setMaxPhotos] = useState('')
   const [selectionDeadline, setSelectionDeadline] = useState('30 hari')
   const [clientName, setClientName] = useState('')
   const [eventDate, setEventDate] = useState('')
-  const [highlightDescription, setHighlightDescription] = useState('')
   const [clientEmail, setClientEmail] = useState('')
   const [clientWhatsapp, setClientWhatsapp] = useState('')
   const [allowDownload, setAllowDownload] = useState(true)
@@ -162,7 +159,6 @@ Selamat menikmati momennya`
   >('Belum mulai')
   const [editWhatsapp, setEditWhatsapp] = useState('')
   const [editDriveLink, setEditDriveLink] = useState('')
-  const [editHighlightDescription, setEditHighlightDescription] = useState('')
   const [editPinCode, setEditPinCode] = useState('')
   const [editIsClientViewed, setEditIsClientViewed] = useState(false)
   const [editNewScannedPhotos, setEditNewScannedPhotos] = useState<
@@ -182,7 +178,6 @@ Selamat menikmati momennya`
     setEditStatus(gallery.status || 'Belum mulai')
     setEditWhatsapp(gallery.whatsapp || '')
     setEditDriveLink(gallery.driveLink || '')
-    setEditHighlightDescription(gallery.highlightDescription || '')
     setEditPinCode(gallery.pinCode || '')
     setEditIsClientViewed(Boolean(gallery.isClientViewed))
     setEditNewScannedPhotos(null)
@@ -264,7 +259,6 @@ Selamat menikmati momennya`
       status: editStatus,
       whatsapp: trimmedWhatsapp,
       driveLink: editDriveLink.trim() || editingGallery.driveLink,
-      highlightDescription: editHighlightDescription.trim(),
       pinCode: editPinCode.trim() || undefined,
       isClientViewed: editIsClientViewed,
       photos:
@@ -494,7 +488,6 @@ Selamat menikmati momennya`
         slug: safeSlug,
         shareToken: 'vtmsvc3urqfm',
         coverUrl: driveResult.photos[0]?.url,
-        highlightDescription: highlightDescription,
         selectedPhotoIds: [],
         photos: driveResult.photos,
       }
@@ -515,10 +508,9 @@ Selamat menikmati momennya`
       setScanError(null)
       setClientName('')
       setEventDate('')
-      setHighlightDescription('')
       setClientEmail('')
       setClientWhatsapp('')
-      setMaxPhotos('60')
+      setMaxPhotos('')
       setSelectionDeadline('30 hari')
       setAllowDownload(true)
       setScanProgress(0)
@@ -938,7 +930,7 @@ Selamat menikmati momennya`
                   min="1"
                   value={maxPhotos}
                   onChange={(e) => setMaxPhotos(e.target.value)}
-                  placeholder="60"
+                  placeholder="60 (Bawaan)"
                   className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                     isDarkMode
                       ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -1010,7 +1002,7 @@ Selamat menikmati momennya`
                   type="text"
                   value={clientName}
                   onChange={(e) => setClientName(e.target.value)}
-                  placeholder="Wisuda Nisa"
+                  placeholder="Contoh: Wedding Sarah & Kevin / Wisuda Maya"
                   className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                     isDarkMode
                       ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -1062,44 +1054,7 @@ Selamat menikmati momennya`
               </div>
             </div>
 
-            {/* Field 6: DESKRIPSI HIGHLIGHT */}
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <label
-                  htmlFor="highlightDescription"
-                  className={`text-[11px] font-bold tracking-wider uppercase ${
-                    isDarkMode ? 'text-slate-300' : 'text-stone-600'
-                  }`}
-                >
-                  Deskripsi Highlight
-                </label>
-                <span className="text-[11px] font-normal text-stone-400">
-                  — TIDAK WAJIB
-                </span>
-              </div>
-              <input
-                id="highlightDescription"
-                type="text"
-                value={highlightDescription}
-                onChange={(e) => setHighlightDescription(e.target.value)}
-                placeholder="Your Story in Frames"
-                className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
-                    : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
-                }`}
-              />
-              <p
-                className={`mt-1.5 text-xs ${
-                  isDarkMode ? 'text-slate-400' : 'text-stone-400'
-                }`}
-              >
-                Kalimat kecil di bawah nama klien di halaman Highlight.
-                Kosongkan untuk pakai bawaan.
-              </p>
-            </div>
-
-            {/* Field 7 & 8: EMAIL KLIEN & WHATSAPP KLIEN (2 Columns) */}
+            {/* Field 6 & 7: EMAIL KLIEN & WHATSAPP KLIEN (2 Columns) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
@@ -1120,7 +1075,7 @@ Selamat menikmati momennya`
                   type="email"
                   value={clientEmail}
                   onChange={(e) => setClientEmail(e.target.value)}
-                  placeholder="klien@email.com"
+                  placeholder="Contoh: nama@email.com"
                   className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                     isDarkMode
                       ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -1149,7 +1104,7 @@ Selamat menikmati momennya`
                   required
                   value={clientWhatsapp}
                   onChange={handleWhatsappChange}
-                  placeholder="08123456789"
+                  placeholder="Contoh: 081234567890"
                   className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                     isDarkMode
                       ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -1927,7 +1882,7 @@ Selamat menikmati momennya`
                     required
                     value={editClientName}
                     onChange={(e) => setEditClientName(e.target.value)}
-                    placeholder="Contoh: WISUDA PUTRA 2026"
+                    placeholder="Contoh: Wedding Sarah & Kevin"
                     className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                       isDarkMode
                         ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -1951,7 +1906,7 @@ Selamat menikmati momennya`
                     required
                     value={editWhatsapp}
                     onChange={handleEditWhatsappChange}
-                    placeholder="08123456789"
+                    placeholder="Contoh: 081234567890"
                     className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                       isDarkMode
                         ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -1977,7 +1932,7 @@ Selamat menikmati momennya`
                     type="text"
                     value={editSlug}
                     onChange={(e) => setEditSlug(e.target.value)}
-                    placeholder="wisuda-putra-2026"
+                    placeholder="contoh: wedding-sarah-kevin"
                     className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
                       isDarkMode
                         ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
@@ -2174,54 +2129,29 @@ Selamat menikmati momennya`
                 )}
               </div>
 
-              {/* Row 5: Deskripsi Highlight & PIN Album */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="editHighlightDescription"
-                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
-                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
-                    }`}
-                  >
-                    Deskripsi Highlight
-                  </label>
-                  <input
-                    id="editHighlightDescription"
-                    type="text"
-                    value={editHighlightDescription}
-                    onChange={(e) => setEditHighlightDescription(e.target.value)}
-                    placeholder="Your Story in Frames"
-                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
-                      isDarkMode
-                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
-                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
-                    }`}
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="editPinCode"
-                    className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
-                      isDarkMode ? 'text-slate-300' : 'text-stone-600'
-                    }`}
-                  >
-                    PIN Keamanan Album (Opsional)
-                  </label>
-                  <input
-                    id="editPinCode"
-                    type="text"
-                    value={editPinCode}
-                    onChange={(e) => setEditPinCode(e.target.value)}
-                    placeholder="Contoh: 1234"
-                    maxLength={8}
-                    className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
-                      isDarkMode
-                        ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
-                        : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
-                    }`}
-                  />
-                </div>
+              {/* Row 5: PIN Keamanan Album */}
+              <div>
+                <label
+                  htmlFor="editPinCode"
+                  className={`block text-[11px] font-bold tracking-wider uppercase mb-1.5 ${
+                    isDarkMode ? 'text-slate-300' : 'text-stone-600'
+                  }`}
+                >
+                  PIN Keamanan Album (Opsional)
+                </label>
+                <input
+                  id="editPinCode"
+                  type="text"
+                  value={editPinCode}
+                  onChange={(e) => setEditPinCode(e.target.value)}
+                  placeholder="Contoh: 1234 (4-8 digit angka)"
+                  maxLength={8}
+                  className={`w-full rounded-xl border py-2.5 px-3.5 text-sm transition-all focus:border-[#9C7844] focus:outline-none focus:ring-2 focus:ring-[#9C7844]/20 ${
+                    isDarkMode
+                      ? 'border-slate-800 bg-slate-950/70 text-slate-100 placeholder-slate-500 focus:bg-slate-950'
+                      : 'border-stone-200 bg-stone-50/40 text-stone-800 placeholder-stone-400 focus:bg-white'
+                  }`}
+                />
               </div>
 
               {/* Row 6: Checkbox Status Dilihat Klien */}

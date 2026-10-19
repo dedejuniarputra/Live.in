@@ -11,7 +11,7 @@ import Login from '../auth/Login.tsx'
 import Dashboard from '../components/admin/dashboard.tsx'
 import PhotoSelection from '../components/client/PhotoSelection.tsx'
 import AlbumShare from '../components/client/AlbumShare.tsx'
-import { supabase } from '../lib/supabase.ts'
+import { onAdminAuthStateChanged } from '../lib/firebase.ts'
 
 function ProtectedAdminRoute({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
@@ -19,19 +19,12 @@ function ProtectedAdminRoute({ children }: { children: ReactNode }) {
   const location = useLocation()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsAuthenticated(Boolean(session))
+    const unsubscribe = onAdminAuthStateChanged((user) => {
+      setIsAuthenticated(Boolean(user))
       setLoading(false)
     })
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setIsAuthenticated(Boolean(session))
-      setLoading(false)
-    })
-
-    return () => subscription.unsubscribe()
+    return () => unsubscribe()
   }, [])
 
   if (loading) {

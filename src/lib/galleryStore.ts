@@ -1,4 +1,26 @@
 import type { DrivePhotoItem } from './googleDrive.ts'
+import { db, isFirebaseConfigured } from './firebase.ts'
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  updateDoc,
+} from 'firebase/firestore'
+
+function sanitizeForFirestore(data: any): any {
+  if (data === undefined) return null
+  if (data === null || typeof data !== 'object') return data
+  if (Array.isArray(data)) return data.map(sanitizeForFirestore)
+  const clean: Record<string, any> = {}
+  for (const [key, val] of Object.entries(data)) {
+    if (val !== undefined) {
+      clean[key] = sanitizeForFirestore(val)
+    }
+  }
+  return clean
+}
 
 export interface GalleryPhoto extends DrivePhotoItem {
   category?: string
@@ -15,6 +37,7 @@ export interface GalleryData {
   remainingDays: number
   status: 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'
   isClientViewed: boolean
+  viewCount?: number
   whatsapp: string
   driveLink: string
   slug: string
@@ -29,152 +52,35 @@ export interface GalleryData {
 
 const STORAGE_KEY = 'livein_galleries_v3'
 
-// Sample family & wedding photo seeds with varied orientations (portrait & landscape)
-const SEED_PHOTOS: Array<{
-  url: string
-  aspect: 'portrait' | 'landscape'
-  category: 'Group' | 'Keluarga' | 'Sendiri'
-  isHighlight?: boolean
-}> = [
-  {
-    url: 'https://images.unsplash.com/photo-1511285560929-80b456fea0bc',
-    aspect: 'portrait',
-    category: 'Keluarga',
-    isHighlight: true,
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1583939003579-730e3918a45a',
-    aspect: 'portrait',
-    category: 'Keluarga',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1520854221256-17451cc331bf',
-    aspect: 'portrait',
-    category: 'Keluarga',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1606800052052-a08af7148866',
-    aspect: 'portrait',
-    category: 'Sendiri',
-    isHighlight: true,
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6',
-    aspect: 'portrait',
-    category: 'Sendiri',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1537633552985-df8429e8048b',
-    aspect: 'portrait',
-    category: 'Group',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1519741497674-611481863552',
-    aspect: 'landscape',
-    category: 'Group',
-    isHighlight: true,
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1515934751635-c81c6bc9a2d8',
-    aspect: 'landscape',
-    category: 'Group',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1507676184212-d03ab07a01bf',
-    aspect: 'landscape',
-    category: 'Keluarga',
-    isHighlight: true,
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486',
-    aspect: 'portrait',
-    category: 'Sendiri',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1544078751-58fee2d8a03b',
-    aspect: 'portrait',
-    category: 'Sendiri',
-  },
-  {
-    url: 'https://images.unsplash.com/photo-1529636798458-92182e662485',
-    aspect: 'landscape',
-    category: 'Keluarga',
-  },
-]
-
-export const INITIAL_GALLERIES: GalleryData[] = [
-  {
-    id: 'gal-wisuda-putra-22-agustus-2026',
-    clientName: 'WISUDA PUTRA 22 AGUSTUS 2026',
-    date: '2026-08-22',
-    maxPhotos: 120,
-    selectedPhotos: 0,
-    remainingDays: 30,
-    status: 'Belum mulai',
-    isClientViewed: false,
-    whatsapp: '08123456789',
-    driveLink:
-      'https://drive.google.com/drive/folders/1kXimzIykec_WamuNSTm37BHB3E11cJDZ?usp=drive_link',
-    slug: 'wisuda-putra-22-agustus-2026',
-    shareToken: 'vtmsvc3urqfm',
-    coverUrl:
-      'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=1600&q=80',
-    selectedPhotoIds: [],
-    photos: Array.from({ length: 441 }).map((_, i) => {
-      const num = 1700 + i
-      const seed = SEED_PHOTOS[i % SEED_PHOTOS.length]
-      const category: 'Group' | 'Keluarga' | 'Sendiri' =
-        i < 126 ? 'Group' : i < 126 + 149 ? 'Keluarga' : 'Sendiri'
-      return {
-        id: `pjas-${num}`,
-        fileId: `drive_pjas_${num}`,
-        filename: `PJAS${num}.jpg`,
-        url: `${seed.url}?auto=format&fit=crop&w=1600&q=80`,
-        thumbnailUrl: `${seed.url}?auto=format&fit=crop&w=600&q=80`,
-        aspect: seed.aspect,
-        category,
-        isHighlight: i % 10 === 0,
-      }
-    }),
-  },
-  {
-    id: 'gal-dede',
-    clientName: 'Dede',
-    date: '2026-09-29',
-    maxPhotos: 60,
-    selectedPhotos: 0,
-    remainingDays: 30,
-    status: 'Belum mulai',
-    isClientViewed: false,
-    whatsapp: '08123456789',
-    driveLink: 'https://drive.google.com/drive/folders/sample-dede-wedding',
-    slug: 'dede',
-    shareToken: 'vtmsvc3urqfm',
-    coverUrl:
-      'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1600&q=80',
-    selectedPhotoIds: [],
-    photos: Array.from({ length: 48 }).map((_, i) => {
-      const num = 101 + i
-      const seed = SEED_PHOTOS[i % SEED_PHOTOS.length]
-      return {
-        id: `df-${num}`,
-        fileId: `drive_sample_${num}`,
-        filename: `DSC_${String(num).padStart(4, '0')}.JPG`,
-        url: `${seed.url}?auto=format&fit=crop&w=1600&q=80`,
-        thumbnailUrl: `${seed.url}?auto=format&fit=crop&w=600&q=80`,
-        aspect: seed.aspect,
-        category: seed.category,
-        isHighlight: seed.isHighlight,
-      }
-    }),
-  },
-]
+export const INITIAL_GALLERIES: GalleryData[] = []
 
 export const DELETED_KEY = 'livein_deleted_galleries_v1'
 
+export function isDummyGallery(_item: any): boolean {
+  // Semua data yang ditambahkan oleh user adalah data galeri nyata (bukan dummy)
+  return false
+}
+
 export function normalizeGalleryItem(item: any): GalleryData {
   if (!item || typeof item !== 'object') {
-    return INITIAL_GALLERIES[0]
+    return {
+      id: `gal-${Date.now()}`,
+      clientName: 'Klien Baru',
+      date: new Date().toISOString().split('T')[0],
+      maxPhotos: 60,
+      selectedPhotos: 0,
+      remainingDays: 30,
+      status: 'Belum mulai',
+      isClientViewed: false,
+      viewCount: 0,
+      whatsapp: '',
+      driveLink: '',
+      slug: 'klien',
+      shareToken: 'vtmsvc3urqfm',
+      selectedPhotoIds: [],
+      photos: [],
+      allowDownload: true,
+    }
   }
 
   const rawPhotos = Array.isArray(item.photos) ? item.photos : []
@@ -219,18 +125,47 @@ export function normalizeGalleryItem(item: any): GalleryData {
     ? item.selectedPhotoIds.map((id: any) => String(id))
     : []
 
+  const maxPhotos = Number(item.maxPhotos) || 60
+  const selectedCount =
+    typeof item.selectedPhotos === 'number' && item.selectedPhotos > selectedPhotoIds.length
+      ? item.selectedPhotos
+      : selectedPhotoIds.length
+
+  // Sinkronisasi status galeri:
+  // - Jika status tersimpan sudah 'Selesai dipilih' atau kuota terpenuhi -> 'Selesai dipilih'
+  // - Jika sudah ada foto yang dipilih (> 0) atau berstatus 'Sedang memilih' -> 'Sedang memilih'
+  // - Jika belum ada foto (0) -> 'Belum mulai'
+  const rawStatus = (item.status || '').toString().trim().toLowerCase()
+  let computedStatus: 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih' = 'Belum mulai'
+
+  if (rawStatus === 'selesai dipilih' || (maxPhotos > 0 && selectedCount >= maxPhotos)) {
+    computedStatus = 'Selesai dipilih'
+  } else if (selectedCount > 0 || rawStatus === 'sedang memilih') {
+    computedStatus = 'Sedang memilih'
+  } else {
+    computedStatus = 'Belum mulai'
+  }
+
   return {
     id: (item.id || `gal-${Date.now()}`).toString(),
     clientName: rawClientName,
     date: (item.date || new Date().toISOString().split('T')[0]).toString(),
-    maxPhotos: Number(item.maxPhotos) || 60,
-    selectedPhotos: selectedPhotoIds.length,
-    remainingDays: Number(item.remainingDays) || 30,
-    status:
-      item.status === 'Selesai dipilih' || item.status === 'Sedang memilih'
-        ? item.status
-        : 'Belum mulai',
+    maxPhotos,
+    selectedPhotos: selectedCount,
+    remainingDays:
+      typeof item.remainingDays === 'number'
+        ? Math.max(0, item.remainingDays)
+        : !isNaN(Number(item.remainingDays))
+        ? Math.max(0, Number(item.remainingDays))
+        : 7,
+    status: computedStatus,
     isClientViewed: Boolean(item.isClientViewed),
+    viewCount:
+      typeof item.viewCount === 'number'
+        ? Math.max(0, item.viewCount)
+        : item.isClientViewed
+        ? 1
+        : 0,
     whatsapp: (item.whatsapp || '').toString(),
     driveLink: (item.driveLink || '').toString(),
     slug: rawSlug,
@@ -270,43 +205,46 @@ export function saveDeletedGalleryIds(ids: string[]): void {
 export function getStoredGalleries(): GalleryData[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
+    let parsed: any[] = []
     if (raw !== null) {
       try {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(normalizeGalleryItem)
-        }
+        const p = JSON.parse(raw)
+        if (Array.isArray(p)) parsed = p
       } catch {}
     }
 
-    // First-time onboarding / migration from older version keys ONLY when STORAGE_KEY is not set or empty
-    const legacyKeys = [
-      'livein_galleries_v2',
-      'livein_galleries_v1',
-      'livein_galleries',
-    ]
-    let foundList: GalleryData[] = []
-    for (const key of legacyKeys) {
-      const oldRaw = localStorage.getItem(key)
-      if (oldRaw) {
+    // Jika STORAGE_KEY saat ini kosong, periksa apakah ada data tersimpan di key versi sebelumnya
+    if (parsed.length === 0) {
+      const legacyKeys = [
+        'livein_galleries_v2',
+        'livein_galleries_v1',
+        'livein_galleries',
+      ]
+      for (const key of legacyKeys) {
         try {
-          const parsed = JSON.parse(oldRaw)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            foundList = parsed.map(normalizeGalleryItem)
-            break
+          const legacyRaw = localStorage.getItem(key)
+          if (legacyRaw) {
+            const lp = JSON.parse(legacyRaw)
+            if (Array.isArray(lp) && lp.length > 0) {
+              parsed = lp
+              break
+            }
           }
         } catch {}
       }
     }
 
-    if (foundList.length === 0) {
-      foundList = INITIAL_GALLERIES.map(normalizeGalleryItem)
+    if (parsed.length > 0) {
+      const clean = parsed.filter((g) => !isDummyGallery(g)).map(normalizeGalleryItem)
+      if (clean.length > 0) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(clean))
+        return clean
+      }
     }
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(foundList))
-    return foundList
+    return []
   } catch {
-    return INITIAL_GALLERIES.map(normalizeGalleryItem)
+    return []
   }
 }
 
@@ -324,17 +262,22 @@ export function saveOrUpdateGallery(newGallery: GalleryData): void {
   const normalized = normalizeGalleryItem(newGallery)
 
   const current = getStoredGalleries()
-  const index = current.findIndex(
-    (g) =>
-      clean(g.id) === clean(normalized.id) ||
-      clean(g.slug) === clean(normalized.slug)
-  )
+  const index = current.findIndex((g) => clean(g.id) === clean(normalized.id))
   if (index >= 0) {
     current[index] = { ...current[index], ...normalized }
   } else {
+    if (current.some((g) => clean(g.slug) === clean(normalized.slug))) {
+      normalized.slug = `${normalized.slug}-${Date.now().toString().slice(-4)}`
+    }
     current.unshift(normalized)
   }
   saveStoredGalleries(current)
+
+  if (isFirebaseConfigured && normalized.id) {
+    setDoc(doc(db, 'galleries', normalized.id), sanitizeForFirestore(normalized), {
+      merge: true,
+    }).catch((err) => console.warn('Firestore setDoc failed:', err))
+  }
 }
 
 export function updateGallery(updated: GalleryData): GalleryData[] {
@@ -343,9 +286,10 @@ export function updateGallery(updated: GalleryData): GalleryData[] {
   const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
   const targetId = clean(normalized.id)
 
+  let finalItem: GalleryData = normalized
   const index = current.findIndex((g) => clean(g.id) === targetId)
   if (index >= 0) {
-    current[index] = {
+    finalItem = {
       ...current[index],
       ...normalized,
       photos:
@@ -354,10 +298,18 @@ export function updateGallery(updated: GalleryData): GalleryData[] {
           : current[index].photos,
       coverUrl: normalized.coverUrl || current[index].coverUrl,
     }
+    current[index] = finalItem
   } else {
     current.unshift(normalized)
   }
   saveStoredGalleries(current)
+
+  if (isFirebaseConfigured && finalItem.id) {
+    setDoc(doc(db, 'galleries', finalItem.id), sanitizeForFirestore(finalItem), {
+      merge: true,
+    }).catch((err) => console.warn('Firestore updateGallery failed:', err))
+  }
+
   return current
 }
 
@@ -373,6 +325,12 @@ export function toggleGalleryDownload(id: string): GalleryData[] {
       allowDownload: !prev,
     }
     saveStoredGalleries(current)
+
+    if (isFirebaseConfigured && current[index].id) {
+      updateDoc(doc(db, 'galleries', current[index].id), {
+        allowDownload: !prev,
+      }).catch((err) => console.warn('Firestore toggleDownload failed:', err))
+    }
   }
   return current
 }
@@ -382,21 +340,60 @@ export function deleteGallery(id: string, slug?: string): GalleryData[] {
   const targetId = clean(id)
   const targetSlug = clean(slug)
 
+  let deletedDocId = targetId
   const current = getStoredGalleries()
   const updated = current.filter((g) => {
     const gid = clean(g.id)
     const gslug = clean(g.slug)
     const gname = clean(g.clientName)
     if (targetId && (gid === targetId || gslug === targetId || gname === targetId)) {
+      deletedDocId = g.id
       return false
     }
     if (targetSlug && (gslug === targetSlug || gid === targetSlug || gname === targetSlug)) {
+      deletedDocId = g.id
       return false
     }
     return true
   })
 
   saveStoredGalleries(updated)
+
+  if (isFirebaseConfigured && deletedDocId) {
+    deleteDoc(doc(db, 'galleries', deletedDocId)).catch((err) =>
+      console.warn('Firestore deleteDoc failed:', err)
+    )
+  }
+
+  return updated
+}
+
+export function deleteMultipleGalleries(ids: string[]): GalleryData[] {
+  const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
+  const targetIds = new Set(ids.map((id) => clean(id)))
+  const current = getStoredGalleries()
+  const deletedDocIds: string[] = []
+
+  const updated = current.filter((g) => {
+    const gid = clean(g.id)
+    const gslug = clean(g.slug)
+    if (targetIds.has(gid) || targetIds.has(gslug)) {
+      if (g.id) deletedDocIds.push(g.id)
+      return false
+    }
+    return true
+  })
+
+  saveStoredGalleries(updated)
+
+  if (isFirebaseConfigured && deletedDocIds.length > 0) {
+    deletedDocIds.forEach((docId) => {
+      deleteDoc(doc(db, 'galleries', docId)).catch((err) =>
+        console.warn('Firestore bulk deleteDoc failed:', err)
+      )
+    })
+  }
+
   return updated
 }
 
@@ -410,10 +407,9 @@ export function findGalleryBySlug(slug: string): GalleryData | null {
   }
   const target = decoded.replace(/-3$/, '')
 
-  let galleries = getStoredGalleries()
+  const galleries = getStoredGalleries()
   if (!galleries || galleries.length === 0) {
-    galleries = INITIAL_GALLERIES.map(normalizeGalleryItem)
-    saveStoredGalleries(galleries)
+    return null
   }
 
   // 1. Exact match by slug, id, or clientName (with or without -3)
@@ -425,7 +421,7 @@ export function findGalleryBySlug(slug: string): GalleryData | null {
   })
   if (exact) return exact
 
-  // 2. Partial match (e.g. "wisuda-putra" in "wisuda-putra-22-agustus-2026")
+  // 2. Partial match
   const partial = galleries.find((g) => {
     const s = (g.slug || '').toLowerCase()
     const name = (g.clientName || '').toLowerCase()
@@ -436,26 +432,7 @@ export function findGalleryBySlug(slug: string): GalleryData | null {
   })
   if (partial) return partial
 
-  // 3. Fallback to INITIAL_GALLERIES if matching default wisuda/dede demo
-  const initialMatch = INITIAL_GALLERIES.find((g) => {
-    const s = (g.slug || '').toLowerCase().replace(/-3$/, '')
-    const id = (g.id || '').toLowerCase().replace(/-3$/, '')
-    const name = (g.clientName || '').toLowerCase().replace(/-3$/, '')
-    return (
-      s === target ||
-      id === target ||
-      name === target ||
-      (s && (s.includes(target) || target.includes(s)))
-    )
-  })
-  if (initialMatch) {
-    const restored = normalizeGalleryItem(initialMatch)
-    saveOrUpdateGallery(restored)
-    return restored
-  }
-
-  // 4. Safe fallback to latest available gallery so page never shows broken error
-  return galleries[0] || INITIAL_GALLERIES[0] || null
+  return null
 }
 
 export function togglePhotoSelection(
@@ -500,5 +477,125 @@ export function togglePhotoSelection(
     saveStoredGalleries(galleries)
   }
 
+  if (isFirebaseConfigured && gallery.id) {
+    updateDoc(doc(db, 'galleries', gallery.id), {
+      selectedPhotoIds: newSelectedIds,
+      selectedPhotos: newSelectedIds.length,
+      status: updatedGallery.status,
+    }).catch((err) => console.warn('Firestore updateDoc photo selection error:', err))
+  }
+
   return { updatedGallery, isSelected: !isAlreadySelected }
+}
+
+export function incrementGalleryViewCount(slugOrId: string): GalleryData | null {
+  try {
+    const galleries = getStoredGalleries()
+    const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
+    const target = clean(slugOrId).replace(/-3$/, '')
+
+    const idx = galleries.findIndex((g) => {
+      const s = clean(g.slug).replace(/-3$/, '')
+      const id = clean(g.id).replace(/-3$/, '')
+      const name = clean(g.clientName).replace(/-3$/, '')
+      return s === target || id === target || name === target
+    })
+
+    if (idx >= 0) {
+      const current = galleries[idx]
+      const newCount = (current.viewCount || 0) + 1
+      const updated: GalleryData = {
+        ...current,
+        isClientViewed: true,
+        viewCount: newCount,
+      }
+      galleries[idx] = updated
+      saveStoredGalleries(galleries)
+
+      if (isFirebaseConfigured && current.id) {
+        updateDoc(doc(db, 'galleries', current.id), {
+          viewCount: newCount,
+          isClientViewed: true,
+        }).catch((err) => console.warn('Firestore viewCount update error:', err))
+      }
+
+      return updated
+    }
+  } catch (e) {
+    console.error('Error incrementing gallery view count:', e)
+  }
+  return null
+}
+
+export async function syncGalleriesFromFirestore(): Promise<GalleryData[]> {
+  if (!isFirebaseConfigured) return getStoredGalleries()
+  try {
+    const snap = await getDocs(collection(db, 'galleries'))
+    if (!snap.empty) {
+      const remoteGalleries: GalleryData[] = []
+      snap.forEach((d) => {
+        const item = d.data()
+        if (item) {
+          remoteGalleries.push(normalizeGalleryItem(item))
+        }
+      })
+      if (remoteGalleries.length > 0) {
+        const local = getStoredGalleries()
+        const mergedMap = new Map<string, GalleryData>()
+        local.forEach((g) => mergedMap.set(g.id, g))
+        remoteGalleries.forEach((g) => mergedMap.set(g.id, g))
+        const merged = Array.from(mergedMap.values())
+        saveStoredGalleries(merged)
+        window.dispatchEvent(new Event('galleries-updated'))
+        return merged
+      }
+    } else {
+      // Jika di cloud masih kosong tapi di lokal sudah ada data galeri,
+      // upload data lokal ke cloud agar langsung tersinkron!
+      const local = getStoredGalleries()
+      if (local.length > 0) {
+        for (const g of local) {
+          setDoc(doc(db, 'galleries', g.id), sanitizeForFirestore(g), {
+            merge: true,
+          }).catch(() => {})
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('syncGalleriesFromFirestore failed:', err)
+  }
+  return getStoredGalleries()
+}
+
+export async function fetchGalleryBySlug(slug: string): Promise<GalleryData | null> {
+  const local = findGalleryBySlug(slug)
+  if (!isFirebaseConfigured) return local
+
+  try {
+    const snap = await getDocs(collection(db, 'galleries'))
+    let foundDoc: GalleryData | null = null
+
+    const clean = (s?: string) => (s ? String(s).toLowerCase().replace(/-3$/, '').trim() : '')
+    const target = clean(slug)
+
+    snap.forEach((d) => {
+      const data = normalizeGalleryItem(d.data())
+      if (
+        clean(data.slug) === target ||
+        clean(data.id) === target ||
+        clean(data.clientName) === target
+      ) {
+        foundDoc = data
+      }
+    })
+
+    if (foundDoc) {
+      saveOrUpdateGallery(foundDoc)
+      return foundDoc
+    }
+  } catch (err) {
+    console.warn('fetchGalleryBySlug cloud fetch failed:', err)
+  }
+
+  return local
 }

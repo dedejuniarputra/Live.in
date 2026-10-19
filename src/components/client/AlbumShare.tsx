@@ -14,12 +14,15 @@ import {
   ChevronRight,
   ChevronDown,
   Check,
+  Eye,
+  CheckCircle2,
 } from 'lucide-react'
 import {
   findGalleryBySlug,
+  fetchGalleryBySlug,
   saveOrUpdateGallery,
   getStoredGalleries,
-  INITIAL_GALLERIES,
+  incrementGalleryViewCount,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -37,15 +40,14 @@ export default function AlbumShare() {
           rawSlug = decodeURIComponent(last).trim()
         }
       }
-      const cleanSlug = (rawSlug || 'wisuda-putra-22-agustus-2026').replace(/-3$/, '')
+      const cleanSlug = rawSlug.replace(/-3$/, '')
       return (
-        findGalleryBySlug(cleanSlug) ||
+        (cleanSlug ? findGalleryBySlug(cleanSlug) : null) ||
         getStoredGalleries()[0] ||
-        INITIAL_GALLERIES[0] ||
         null
       )
     } catch {
-      return INITIAL_GALLERIES[0] || null
+      return null
     }
   })
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -95,19 +97,45 @@ export default function AlbumShare() {
           rawSlug = decodeURIComponent(last).trim()
         }
       }
-      const cleanSlug = (rawSlug || 'wisuda-putra-22-agustus-2026').replace(/-3$/, '')
-      const data =
-        findGalleryBySlug(cleanSlug) ||
-        getStoredGalleries()[0] ||
-        INITIAL_GALLERIES[0]
-      if (data) {
-        setGallery(data)
+      const cleanSlug = rawSlug.replace(/-3$/, '')
+
+      const applyGallery = (data: GalleryData) => {
+        const sessionKey = `livein_album_view_${data.id}`
+        if (!sessionStorage.getItem(sessionKey)) {
+          const updated = incrementGalleryViewCount(data.slug || data.id)
+          if (updated) {
+            setGallery(updated)
+            sessionStorage.setItem(sessionKey, '1')
+          } else {
+            setGallery(data)
+          }
+        } else {
+          setGallery(data)
+        }
+
         if (data.pinCode) {
           setIsPinLocked(true)
         }
         if (data.clientName) {
           document.title = `${data.clientName} — Album Kenangan`
         }
+      }
+
+      const localData =
+        (cleanSlug ? findGalleryBySlug(cleanSlug) : null) ||
+        getStoredGalleries()[0] ||
+        null
+
+      if (localData) {
+        applyGallery(localData)
+      }
+
+      if (cleanSlug) {
+        fetchGalleryBySlug(cleanSlug).then((remoteData) => {
+          if (remoteData) {
+            applyGallery(remoteData)
+          }
+        })
       }
     } catch (e) {
       console.error('[AlbumShare] Error loading gallery:', e)
@@ -305,7 +333,7 @@ export default function AlbumShare() {
           <button
             type="button"
             onClick={() => {
-              const latest = getStoredGalleries()[0] || INITIAL_GALLERIES[0]
+              const latest = getStoredGalleries()[0] || null
               if (latest) {
                 setGallery(latest)
               }
@@ -475,6 +503,18 @@ export default function AlbumShare() {
           {gallery.clientName} &amp; Moments
         </h1>
 
+        {/* Album Subtitle & Views */}
+        <div className="flex items-center justify-center gap-2 text-xs sm:text-sm text-slate-400 mt-2 flex-wrap">
+          <span>{gallery.date || 'Tanpa Tanggal'}</span>
+          <span>•</span>
+          <span className="inline-flex items-center gap-1 text-slate-300">
+            <Eye className="h-3.5 w-3.5 text-[#C9A26A]" />
+            <span>Dibuka {gallery.viewCount || 1}x</span>
+          </span>
+          <span>•</span>
+          <span>{photos.length} Foto</span>
+        </div>
+
         {/* Action Buttons Toolbar (Centered) */}
         <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-2.5 mt-5">
           <button
@@ -523,6 +563,17 @@ export default function AlbumShare() {
             <span>Salin Link</span>
           </button>
         </div>
+
+        {/* Tombol Lihat Foto Pilihan Klien */}
+        {(gallery.selectedPhotos || 0) > 0 && (
+          <Link
+            to={`/gallery/${gallery.slug}?tab=terpilih`}
+            className="mt-4 flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-600/20 hover:bg-blue-600 hover:border-blue-600 text-blue-200 hover:text-white px-5 py-2 text-xs sm:text-sm font-semibold shadow-lg shadow-blue-900/20 transition-all cursor-pointer"
+          >
+            <CheckCircle2 className="h-4 w-4 text-blue-400" />
+            <span>Lihat {gallery.selectedPhotos} Foto Pilihan Klien</span>
+          </Link>
+        )}
       </section>
 
       {/* Album Photos Responsive Grid (Edge-to-edge neat layout) */}

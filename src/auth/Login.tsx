@@ -8,7 +8,7 @@ import {
   ArrowRight,
   AlertCircle,
 } from 'lucide-react'
-import { signInAdmin, isSupabaseConfigured } from '../lib/supabase.ts'
+import { signInAdmin, isFirebaseConfigured } from '../lib/firebase.ts'
 
 const MAX_ATTEMPTS = 5
 const LOCKOUT_MS = 60_000
@@ -134,11 +134,11 @@ export default function Login() {
             </div>
           )}
 
-          {!isSupabaseConfigured && (
+          {!isFirebaseConfigured && (
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] text-amber-300/90 flex items-start gap-2">
               <span className="shrink-0 font-bold text-amber-400">INFO:</span>
               <span>
-                Supabase belum terhubung di .env. Anda dapat mencoba login demo admin: <strong className="text-amber-200">admin@livein.com</strong> (password bebas min. 6 karakter).
+                Firebase belum terhubung di .env. Anda dapat mencoba login demo admin: <strong className="text-amber-200">admin@livein.com</strong> (password bebas min. 6 karakter).
               </span>
             </div>
           )}

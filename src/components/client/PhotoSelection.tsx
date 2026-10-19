@@ -19,12 +19,15 @@ import {
   Grid2X2,
   Grid3X3,
   Columns2,
+  Eye,
 } from 'lucide-react'
 import {
   findGalleryBySlug,
+  fetchGalleryBySlug,
   togglePhotoSelection,
+  saveOrUpdateGallery,
   getStoredGalleries,
-  INITIAL_GALLERIES,
+  incrementGalleryViewCount,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -43,13 +46,12 @@ export default function PhotoSelection() {
         }
       }
       return (
-        findGalleryBySlug(targetSlug || 'wisuda-putra-22-agustus-2026') ||
+        (targetSlug ? findGalleryBySlug(targetSlug) : null) ||
         getStoredGalleries()[0] ||
-        INITIAL_GALLERIES[0] ||
         null
       )
     } catch {
-      return INITIAL_GALLERIES[0] || null
+      return null
     }
   })
 
@@ -68,7 +70,8 @@ export default function PhotoSelection() {
   const [activePhotoIndex, setActivePhotoIndex] = useState<number>(0)
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false)
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false)
-  const [clientNotes, setClientNotes] = useState('')
+  const [isCopied, setIsCopied] = useState(false)
+  const [loadedPhotos, setLoadedPhotos] = useState<Record<string, boolean>>({})
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [touchStartX, setTouchStartX] = useState<number | null>(null)
@@ -101,21 +104,60 @@ export default function PhotoSelection() {
           targetSlug = decodeURIComponent(last).trim()
         }
       }
-      if (!targetSlug) {
-        targetSlug = 'wisuda-putra-22-agustus-2026'
+
+      const applyGallery = (data: GalleryData) => {
+        const sessionKey = `livein_selection_view_${data.id}`
+        if (!sessionStorage.getItem(sessionKey)) {
+          const updated = incrementGalleryViewCount(data.slug || data.id)
+          if (updated) {
+            setGallery(updated)
+            sessionStorage.setItem(sessionKey, '1')
+          } else {
+            setGallery(data)
+          }
+        } else {
+          setGallery(data)
+        }
+
+        if (data?.clientName) {
+          document.title = `${data.clientName} — Pilih Foto Favorit`
+        }
+        setIsLoading(false)
       }
 
-      const data = findGalleryBySlug(targetSlug)
-      setGallery(data)
-      if (data?.clientName) {
-        document.title = `${data.clientName} — Pilih Foto Favorit`
+      const localData =
+        (targetSlug ? findGalleryBySlug(targetSlug) : null) ||
+        getStoredGalleries()[0] ||
+        null
+
+      if (localData) {
+        applyGallery(localData)
+      }
+
+      if (targetSlug) {
+        fetchGalleryBySlug(targetSlug).then((remoteData) => {
+          if (remoteData) {
+            applyGallery(remoteData)
+          } else if (!localData) {
+            setGallery(null)
+            setIsLoading(false)
+          }
+        })
+      } else if (!localData) {
+        setIsLoading(false)
+      }
+
+      // Check ?tab=terpilih in URL
+      const params = new URLSearchParams(location.search)
+      if (params.get('tab') === 'terpilih') {
+        setMainTab('terpilih')
       }
     } catch (err) {
       console.error('[PhotoSelection] Error loading gallery:', err)
     } finally {
       setIsLoading(false)
     }
-  }, [slug, location.pathname])
+  }, [slug, location.pathname, location.search])
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -203,62 +245,98 @@ export default function PhotoSelection() {
     setActivePhoto(filteredPhotos[prevIdx])
   }
 
-  const handleFinalSubmit = () => {
+  const handleCopyList = () => {
     if (!gallery) return
-    setIsSubmitModalOpen(false)
-    showToast('Pilihan foto berhasil disimpan!')
+    const selectedPhotosList = photos.filter((p) => p && selectedPhotoIds.includes(p.id))
+    const filenamesText = selectedPhotosList
+      .map((p) => `${p.filename || `Foto-${p.id}`},`)
+      .join('\n')
 
-    const selectedFilenames = photos
-      .filter((p) => p && selectedPhotoIds.includes(p.id))
-      .map((p) => p.filename || 'Foto')
-      .join(', ')
+    const clientName = (gallery.clientName || '').trim() || 'Wisuda Putra 22 Agustus 2026'
 
-    const waMsg = `Halo Livesostory.co, saya ${gallery.clientName} telah selesai memilih ${selectedCount} foto favorit:
-${selectedFilenames}
+    const fullMsg = `Hallo kak LIVESOSTORY.CO, berikut daftar foto yang saya pilih dari folder ${clientName}:
 
-Catatan: ${clientNotes || 'Tidak ada catatan tambahan.'}
+${filenamesText}
 
-Terima kasih!`
+Terima kasih kak :)`
 
-    const cleanPhone = (gallery.whatsapp || '').replace(/\D/g, '')
-    const targetPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone
-    if (targetPhone) {
-      window.open(
-        `https://api.whatsapp.com/send?phone=${targetPhone}&text=${encodeURIComponent(waMsg)}`,
-        '_blank'
-      )
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullMsg)
+    } else {
+      const textArea = document.createElement('textarea')
+      textArea.value = fullMsg
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
     }
+
+    setIsCopied(true)
+    showToast('Pesan & daftar foto berhasil disalin!')
+    setTimeout(() => setIsCopied(false), 2500)
+  }
+
+  const handleOpenWhatsApp = () => {
+    if (!gallery) return
+    showToast('Membuka WhatsApp...')
+
+    const selectedPhotosList = photos.filter((p) => p && selectedPhotoIds.includes(p.id))
+    const filenamesText = selectedPhotosList
+      .map((p) => `${p.filename || `Foto-${p.id}`},`)
+      .join('\n')
+
+    const clientName = (gallery.clientName || '').trim() || 'Wisuda Putra 22 Agustus 2026'
+
+    const waMsg = `Hallo kak LIVESOSTORY.CO, berikut daftar foto yang saya pilih dari folder ${clientName}:
+
+${filenamesText}
+
+Terima kasih kak :)`
+
+    const rawPhone = import.meta.env.VITE_ADMIN_WHATSAPP || gallery.whatsapp || '628123456789'
+    const cleanPhone = String(rawPhone).replace(/\D/g, '')
+    const targetPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone || '628123456789'
+    window.open(
+      `https://api.whatsapp.com/send?phone=${targetPhone}&text=${encodeURIComponent(waMsg)}`,
+      '_blank'
+    )
   }
 
   // Keyboard navigation & shortcuts for Lightbox
   useEffect(() => {
-    if (!activePhoto || filteredPhotos.length === 0) return
+    if (filteredPhotos.length === 0) return
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore shortcuts if client is typing inside an input or textarea
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return
 
       if (e.key === 'Escape') {
+        if (isSubmitModalOpen) {
+          setIsSubmitModalOpen(false)
+          return
+        }
         if (isCompareMode) {
           setIsCompareMode(false)
-        } else {
+        } else if (activePhoto) {
           closeLightbox()
         }
-      } else if (e.key === 'ArrowLeft') {
-        prevPhoto()
-      } else if (e.key === 'ArrowRight') {
-        nextPhoto()
-      } else if (e.code === 'Space' || e.key === ' ') {
-        e.preventDefault()
-        handleToggle(activePhoto)
-      } else if (e.key === 'c' || e.key === 'C') {
-        if (filteredPhotos.length > 1) {
-          setIsCompareMode((prev) => !prev)
+      } else if (activePhoto) {
+        if (e.key === 'ArrowLeft') {
+          prevPhoto()
+        } else if (e.key === 'ArrowRight') {
+          nextPhoto()
+        } else if (e.code === 'Space' || e.key === ' ') {
+          e.preventDefault()
+          handleToggle(activePhoto)
+        } else if (e.key === 'c' || e.key === 'C') {
+          if (filteredPhotos.length > 1) {
+            setIsCompareMode((prev) => !prev)
+          }
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activePhoto, activePhotoIndex, filteredPhotos, isCompareMode])
+  }, [activePhoto, activePhotoIndex, filteredPhotos, isCompareMode, isSubmitModalOpen])
 
   // Mobile Touch Gestures for Lightbox
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -367,7 +445,7 @@ Terima kasih!`
           <button
             type="button"
             onClick={() => {
-              const latest = getStoredGalleries()[0] || INITIAL_GALLERIES[0]
+              const latest = getStoredGalleries()[0] || null
               if (latest) setGallery(latest)
             }}
             className="rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 px-4 py-2 text-xs font-bold text-slate-950 transition-all cursor-pointer"
@@ -422,19 +500,26 @@ Terima kasih!`
                 {gallery.clientName}
               </h1>
               <p
-                className={`mt-0.5 text-xs ${
+                className={`mt-0.5 text-xs flex items-center gap-2 flex-wrap ${
                   isDarkMode ? 'text-slate-400' : 'text-stone-500'
                 }`}
               >
-                Pilih hingga{' '}
-                <strong
-                  className={`font-semibold ${
-                    isDarkMode ? 'text-[#E8C28A]' : 'text-stone-800'
-                  }`}
-                >
-                  {maxPhotos}
-                </strong>{' '}
-                foto
+                <span>
+                  Pilih hingga{' '}
+                  <strong
+                    className={`font-semibold ${
+                      isDarkMode ? 'text-[#E8C28A]' : 'text-stone-800'
+                    }`}
+                  >
+                    {maxPhotos}
+                  </strong>{' '}
+                  foto
+                </span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1 text-[#C9A26A]">
+                  <Eye className="h-3 w-3" />
+                  <span>Dibuka {gallery.viewCount || 1}x</span>
+                </span>
               </p>
             </div>
 
@@ -655,46 +740,67 @@ Terima kasih!`
             </p>
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2.5 sm:gap-3 justify-start">
+          <div
+            className={`gap-3 sm:gap-4 ${
+              gridSize === 'large'
+                ? 'columns-1 sm:columns-2 md:columns-3 lg:columns-3 xl:columns-4'
+                : 'columns-2 sm:columns-3 md:columns-4 lg:columns-4 xl:columns-5'
+            }`}
+          >
             {filteredPhotos.map((photo, index) => {
               if (!photo) return null
               const isSelected = selectedPhotoIds.includes(photo.id)
               const isLandscape = photo.aspect === 'landscape'
-              const heightClass =
-                gridSize === 'large'
-                  ? 'h-[230px] sm:h-[300px] md:h-[360px]'
-                  : 'h-[175px] sm:h-[220px] md:h-[250px]'
+              const isLoaded = Boolean(loadedPhotos[photo.id])
+              const initialSrc =
+                photo.thumbnailUrl ||
+                (photo.fileId
+                  ? `https://drive.google.com/thumbnail?id=${photo.fileId}&sz=w800`
+                  : photo.url)
 
               return (
                 <div
                   key={photo.id}
                   onClick={() => openLightbox(photo, index)}
-                  className={`group relative overflow-hidden rounded-xl cursor-pointer transition-all ${heightClass} ${
-                    isLandscape ? 'aspect-[4/3] grow' : 'aspect-[3/4] grow'
+                  className={`group relative break-inside-avoid mb-3 sm:mb-4 overflow-hidden rounded-xl cursor-pointer transition-all ${
+                    isLandscape ? 'aspect-[4/3]' : 'aspect-[3/4]'
                   } ${
                     isDarkMode
                       ? 'bg-slate-900 border border-slate-800/80'
-                      : 'bg-stone-200'
+                      : 'bg-stone-200 border border-stone-200/80'
                   } ${
                     isSelected
                       ? 'ring-3 ring-[#C9A26A] shadow-xl'
                       : 'hover:brightness-95'
                   }`}
                 >
+                  {/* Skeleton Placeholder (Prevents blank gaps and layout jumps) */}
+                  {!isLoaded && (
+                    <div
+                      className={`absolute inset-0 animate-pulse ${
+                        isDarkMode ? 'bg-slate-800/60' : 'bg-stone-300/60'
+                      }`}
+                    />
+                  )}
+
                   <img
-                    src={photo.thumbnailUrl || (photo.fileId ? `/api/drive-image?id=${photo.fileId}&sz=800` : photo.url)}
+                    src={initialSrc}
                     alt={photo.filename}
-                    loading="lazy"
+                    loading={index < 12 ? 'eager' : 'lazy'}
+                    decoding="async"
+                    // @ts-ignore
+                    fetchPriority={index < 6 ? 'high' : 'auto'}
                     referrerPolicy="no-referrer"
+                    onLoad={() =>
+                      setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
+                    }
                     onError={(e) => {
+                      setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                       const fileId = photo.fileId || photo.id
                       const target = e.currentTarget
                       if (!target.dataset.triedProxy && fileId) {
                         target.dataset.triedProxy = 'true'
                         target.src = `/api/drive-image?id=${fileId}&sz=800`
-                      } else if (!target.dataset.triedDirect && fileId) {
-                        target.dataset.triedDirect = 'true'
-                        target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`
                       } else if (!target.dataset.triedLh3 && fileId) {
                         target.dataset.triedLh3 = 'true'
                         target.src = `https://lh3.googleusercontent.com/d/${fileId}`
@@ -702,7 +808,9 @@ Terima kasih!`
                         target.src = photo.url
                       }
                     }}
-                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                    className={`h-full w-full object-cover transition-opacity duration-300 group-hover:scale-[1.02] ${
+                      isLoaded ? 'opacity-100' : 'opacity-0'
+                    }`}
                   />
 
                   {/* Subtle dark overlay when touched/hovered */}
@@ -782,7 +890,7 @@ Terima kasih!`
               </span>
             )}
             {selectedCount > 0 && selectedCount < maxPhotos && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-medium text-amber-300/90">
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-300/90">
                 • Kurang {maxPhotos - selectedCount} foto lagi
               </span>
             )}
@@ -812,12 +920,27 @@ Terima kasih!`
 
             <button
               type="button"
-              onClick={() => setIsSubmitModalOpen(true)}
-              disabled={selectedCount === 0}
-              className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all cursor-pointer ${
-                selectedCount > 0
-                  ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 text-slate-950 shadow-lg shadow-[#C9A26A]/20 active:scale-95'
-                  : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
+              disabled={selectedCount < maxPhotos}
+              onClick={() => {
+                if (selectedCount < maxPhotos) return
+                setIsSubmitModalOpen(true)
+                if (gallery && gallery.status !== 'Selesai dipilih') {
+                  const updated = { ...gallery, status: 'Selesai dipilih' as const }
+                  setGallery(updated)
+                  saveOrUpdateGallery(updated)
+                }
+              }}
+              title={
+                selectedCount < maxPhotos
+                  ? `Pilih ${maxPhotos - selectedCount} foto lagi untuk menyelesaikan`
+                  : 'Selesai Memilih'
+              }
+              className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all ${
+                selectedCount >= maxPhotos
+                  ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 text-slate-950 shadow-lg shadow-[#C9A26A]/20 active:scale-95 cursor-pointer'
+                  : isDarkMode
+                  ? 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
+                  : 'bg-stone-200/80 text-stone-400 border border-stone-300/60 cursor-not-allowed opacity-60'
               }`}
             >
               <Send className="h-3.5 w-3.5" />
@@ -1036,12 +1159,17 @@ Terima kasih!`
 
       {/* Confirmation Modal to Send Selected Photos */}
       {isSubmitModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in"
+          onClick={() => setIsSubmitModalOpen(false)}
+        >
           <div
+            onClick={(e) => e.stopPropagation()}
             className={`w-full max-w-md rounded-3xl p-6 sm:p-7 shadow-2xl border transition-all ${
-              isDarkMode ? 'border-slate-800 bg-slate-900 text-slate-100' : 'border-stone-200 bg-white text-stone-900'
+              isDarkMode ? 'border-slate-800 bg-[#0c121e] text-slate-100' : 'border-stone-200 bg-white text-stone-900'
             }`}
           >
+            {/* Header: Send Icon & Title */}
             <div className="flex items-center gap-3 mb-4">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#9C7844]/15 text-[#C9A26A]">
                 <Send className="h-6 w-6" />
@@ -1054,14 +1182,15 @@ Terima kasih!`
               </div>
             </div>
 
+            {/* Info Summary Card */}
             <div
-              className={`rounded-2xl p-4 space-y-2 text-xs mb-4 border ${
+              className={`rounded-2xl p-4 space-y-2 text-xs mb-3.5 border ${
                 isDarkMode ? 'border-slate-800 bg-slate-950/60' : 'border-stone-200 bg-[#FAF8F5]'
               }`}
             >
               <div className="flex justify-between">
                 <span className={isDarkMode ? 'text-slate-400' : 'text-stone-500'}>Klien:</span>
-                <span className="font-semibold text-white">{gallery.clientName}</span>
+                <span className="font-semibold">{gallery.clientName}</span>
               </div>
               <div className="flex justify-between">
                 <span className={isDarkMode ? 'text-slate-400' : 'text-stone-500'}>Foto Terpilih:</span>
@@ -1071,28 +1200,52 @@ Terima kasih!`
               </div>
             </div>
 
+            {/* Green Notification Alert */}
+            <div className="flex items-center gap-2 rounded-xl bg-[#0f2419] border border-[#1b4e31] px-3.5 py-2.5 text-xs font-medium text-[#4ade80] mb-3.5">
+              <span className="font-bold">✓</span>
+              <span>
+                {selectedCount} foto tersimpan. Fotografermu sudah bisa melihatnya.
+              </span>
+            </div>
+
+            {/* Scrollable Filename List */}
             <div className="space-y-1.5 mb-5">
-              <label className={`block text-xs font-medium ${isDarkMode ? 'text-slate-300' : 'text-stone-600'}`}>
-                Catatan khusus (opsional):
-              </label>
+              <div className="flex items-center justify-between text-xs">
+                <span className={`font-medium ${isDarkMode ? 'text-slate-300' : 'text-stone-600'}`}>
+                  Daftar foto terpilih ({selectedCount}):
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyList}
+                  className="text-[11px] text-[#C9A26A] hover:text-[#E8C28A] cursor-pointer font-semibold flex items-center gap-1 transition-colors"
+                  title="Salin pesan & daftar foto"
+                >
+                  <span>📋</span>
+                  <span>{isCopied ? 'Tersalin!' : 'Salin'}</span>
+                </button>
+              </div>
               <textarea
-                value={clientNotes}
-                onChange={(e) => setClientNotes(e.target.value)}
-                placeholder="Contoh: Mohon foto keluarga diperhalus warnanya..."
-                rows={3}
-                className={`w-full rounded-xl border p-3 text-xs focus:border-[#C9A26A] focus:outline-none ${
+                readOnly
+                rows={5}
+                value={photos
+                  .filter((p) => p && selectedPhotoIds.includes(p.id))
+                  .map((p) => p.filename || `Foto-${p.id}`)
+                  .join('\n')}
+                className={`w-full rounded-xl border p-3 text-xs font-mono focus:outline-none resize-none leading-relaxed select-all ${
                   isDarkMode
-                    ? 'border-slate-800 bg-slate-950 text-slate-200'
+                    ? 'border-slate-800 bg-slate-950/80 text-slate-200'
                     : 'border-stone-200 bg-[#FAF8F5] text-stone-800'
                 }`}
+                title="Daftar nama file foto terpilih"
               />
             </div>
 
+            {/* Action Buttons: Batal & Kirim via WhatsApp */}
             <div className="flex items-center gap-2.5">
               <button
                 type="button"
                 onClick={() => setIsSubmitModalOpen(false)}
-                className={`flex-1 rounded-xl border py-2.5 text-xs font-semibold cursor-pointer ${
+                className={`flex-1 rounded-xl border py-2.5 text-xs font-semibold cursor-pointer transition-colors ${
                   isDarkMode
                     ? 'border-slate-800 text-slate-300 hover:bg-slate-800'
                     : 'border-stone-200 text-stone-700 hover:bg-stone-50'
@@ -1102,8 +1255,8 @@ Terima kasih!`
               </button>
               <button
                 type="button"
-                onClick={handleFinalSubmit}
-                className="flex-1 rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 py-2.5 text-xs font-bold text-slate-950 shadow-md cursor-pointer"
+                onClick={handleOpenWhatsApp}
+                className="flex-1 rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 active:scale-[0.99] py-2.5 text-xs font-bold text-slate-950 shadow-md cursor-pointer transition-all"
               >
                 Kirim via WhatsApp
               </button>

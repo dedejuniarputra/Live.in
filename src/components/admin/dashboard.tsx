@@ -1,6 +1,7 @@
-import { useState, useEffect, type FormEvent, type ChangeEvent } from 'react'
+import { useState, useEffect, useRef, type FormEvent, type ChangeEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  Home,
   LogOut,
   Check,
   CheckCircle2,
@@ -10,10 +11,7 @@ import {
   Eye,
   AlertCircle,
   FolderKanban,
-  BarChart3,
-  Menu,
   Search,
-  ExternalLink,
   Share2,
   Folder,
   Calendar,
@@ -21,14 +19,22 @@ import {
   Clock,
   X,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Download,
 } from 'lucide-react'
-import { signOutAdmin, supabase, ADMIN_EMAIL } from '../../lib/supabase.ts'
+import { createZipBlob } from '../../lib/zipHelper.ts'
+import { signOutAdmin } from '../../lib/firebase.ts'
 import {
   getStoredGalleries,
   saveOrUpdateGallery,
   updateGallery,
   deleteGallery,
+  deleteMultipleGalleries,
+  syncGalleriesFromFirestore,
   type GalleryData,
+  type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
 import {
   scanGoogleDriveFolder,
@@ -38,30 +44,49 @@ import {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [adminEmail, setAdminEmail] = useState<string>(ADMIN_EMAIL)
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false)
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'galleries' | 'analytics'>('galleries')
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterStatus, setFilterStatus] = useState<'Semua' | 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'>('Semua')
+  const [filterStatus, setFilterStatus] = useState<
+    'Semua' | 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'
+  >('Semua')
 
   // Permanent dark theme for Admin Dashboard
   const isDarkMode = true
   useEffect(() => {
     document.documentElement.classList.add('dark')
     localStorage.setItem('livein-theme', 'dark')
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user?.email) {
-        setAdminEmail(user.email)
-      }
-    })
+  }, [])
+
+  // Navbar transparent on top, blur on scroll
+  const [isScrolled, setIsScrolled] = useState(false)
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 15)
+    }
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    handleScroll()
+    return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
   // Galleries list state (synced with storage & client routes)
   const [galleries, setGalleries] = useState<GalleryData[]>(() =>
     getStoredGalleries()
   )
+
+  useEffect(() => {
+    setGalleries(getStoredGalleries())
+    syncGalleriesFromFirestore().then((remote) => {
+      if (remote && remote.length > 0) {
+        setGalleries([...remote])
+      }
+    })
+    const handleStorage = () => setGalleries(getStoredGalleries())
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('galleries-updated', handleStorage)
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('galleries-updated', handleStorage)
+    }
+  }, [])
 
   // Share Ready Modal State
   const [isShareModalOpen, setIsShareModalOpen] = useState(false)
@@ -114,22 +139,36 @@ Selamat menikmati momennya`
   // Form states
   const [driveLink, setDriveLink] = useState('')
   const [maxPhotos, setMaxPhotos] = useState('')
-  const [selectionDeadline, setSelectionDeadline] = useState('30 hari')
+  const [isMaxPhotosDropdownOpen, setIsMaxPhotosDropdownOpen] = useState(false)
+  const [dropdownPlacement, setDropdownPlacement] = useState<'down' | 'up'>('down')
+  const maxPhotosContainerRef = useRef<HTMLDivElement>(null)
+
+  const toggleMaxPhotosDropdown = () => {
+    if (!isMaxPhotosDropdownOpen && maxPhotosContainerRef.current) {
+      const rect = maxPhotosContainerRef.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      if (spaceBelow < 240 && rect.top > 240) {
+        setDropdownPlacement('up')
+      } else {
+        setDropdownPlacement('down')
+      }
+    }
+    setIsMaxPhotosDropdownOpen((prev) => !prev)
+  }
   const [clientName, setClientName] = useState('')
-  const [eventDate, setEventDate] = useState('')
-  const [clientEmail, setClientEmail] = useState('')
   const [clientWhatsapp, setClientWhatsapp] = useState('')
   const [allowDownload, setAllowDownload] = useState(true)
 
   // Scanned photos preview state (Real-time scan hasil foto Drive)
   const [scannedPhotos, setScannedPhotos] = useState<DrivePhotoItem[]>([])
   const [isScanningLink, setIsScanningLink] = useState(false)
-  const [scanResultSource, setScanResultSource] = useState<string>('')
   const [scanError, setScanError] = useState<string | null>(null)
   const [detectedFolderName, setDetectedFolderName] = useState<string>('')
   const [previewLightboxPhoto, setPreviewLightboxPhoto] = useState<DrivePhotoItem | null>(null)
   const [showAllScannedModal, setShowAllScannedModal] = useState(false)
   const [galleryToDelete, setGalleryToDelete] = useState<GalleryData | null>(null)
+  const [viewingSelectedGallery, setViewingSelectedGallery] = useState<GalleryData | null>(null)
+  const [selectedLightboxPhoto, setSelectedLightboxPhoto] = useState<GalleryPhoto | null>(null)
 
   const confirmDeleteGallery = (gallery: GalleryData) => {
     const updated = deleteGallery(gallery.id, gallery.slug)
@@ -142,9 +181,23 @@ Selamat menikmati momennya`
   const [editingGallery, setGalleryToEdit] = useState<GalleryData | null>(null)
   const [editClientName, setEditClientName] = useState('')
   const [editSlug, setEditSlug] = useState('')
-  const [editEventDate, setEditEventDate] = useState('')
   const [editMaxPhotos, setEditMaxPhotos] = useState('60')
-  const [editRemainingDays, setEditRemainingDays] = useState('30')
+  const [isEditMaxPhotosDropdownOpen, setIsEditMaxPhotosDropdownOpen] = useState(false)
+  const [editDropdownPlacement, setEditDropdownPlacement] = useState<'down' | 'up'>('down')
+  const editMaxPhotosContainerRef = useRef<HTMLDivElement>(null)
+
+  const toggleEditMaxPhotosDropdown = () => {
+    if (!isEditMaxPhotosDropdownOpen && editMaxPhotosContainerRef.current) {
+      const rect = editMaxPhotosContainerRef.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      if (spaceBelow < 240 && rect.top > 240) {
+        setEditDropdownPlacement('up')
+      } else {
+        setEditDropdownPlacement('down')
+      }
+    }
+    setIsEditMaxPhotosDropdownOpen((prev) => !prev)
+  }
   const [editStatus, setEditStatus] = useState<
     'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'
   >('Belum mulai')
@@ -163,9 +216,8 @@ Selamat menikmati momennya`
     setGalleryToEdit(gallery)
     setEditClientName(gallery.clientName || '')
     setEditSlug(gallery.slug || '')
-    setEditEventDate(gallery.date || '')
     setEditMaxPhotos(String(gallery.maxPhotos || 60))
-    setEditRemainingDays(String(gallery.remainingDays || 30))
+    setIsEditMaxPhotosDropdownOpen(false)
     setEditStatus(gallery.status || 'Belum mulai')
     setEditWhatsapp(gallery.whatsapp || '')
     setEditDriveLink(gallery.driveLink || '')
@@ -233,6 +285,20 @@ Selamat menikmati momennya`
       return
     }
 
+    const editAvailablePhotosCount = (
+      editNewScannedPhotos && editNewScannedPhotos.length > 0
+        ? editNewScannedPhotos
+        : editingGallery.photos
+    )?.length || 0
+    const parsedEditMax = parseInt(editMaxPhotos) || editingGallery.maxPhotos
+
+    if (editAvailablePhotosCount > 0 && parsedEditMax > editAvailablePhotosCount) {
+      showToast(
+        `Batas foto dipilih (${parsedEditMax}) tidak boleh melebihi jumlah foto yang tersedia (${editAvailablePhotosCount} foto).`
+      )
+      return
+    }
+
     const safeSlug =
       (editSlug.trim() || trimmedName)
         .toLowerCase()
@@ -244,9 +310,8 @@ Selamat menikmati momennya`
       ...editingGallery,
       clientName: trimmedName,
       slug: safeSlug,
-      date: editEventDate || editingGallery.date,
       maxPhotos: parseInt(editMaxPhotos) || editingGallery.maxPhotos,
-      remainingDays: parseInt(editRemainingDays) || editingGallery.remainingDays,
+      remainingDays: editingGallery.remainingDays || 0,
       status: editStatus,
       whatsapp: trimmedWhatsapp,
       driveLink: editDriveLink.trim() || editingGallery.driveLink,
@@ -314,6 +379,178 @@ Selamat menikmati momennya`
     }, 3500)
   }
 
+  const [isDownloadingPhoto, setIsDownloadingPhoto] = useState(false)
+
+  const handleShareSelectedPhoto = async (photo: GalleryPhoto) => {
+    const baseUrl = window.location.origin
+    const shareUrl = viewingSelectedGallery
+      ? `${baseUrl}/livesotory-co/${viewingSelectedGallery.slug}`
+      : window.location.href
+    const photoDirectUrl = photo.url || shareUrl
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${viewingSelectedGallery?.clientName || 'Livesostory'} - ${photo.filename}`,
+          text: `Lihat foto terpilih ${photo.filename} (${viewingSelectedGallery?.clientName || 'Livesostory'}):`,
+          url: photoDirectUrl,
+        })
+        return
+      } catch {
+        // Fallback to clipboard
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(photoDirectUrl)
+      showToast(`Tautan foto ${photo.filename} berhasil disalin!`)
+    } catch {
+      showToast('Gagal menyalin tautan foto.')
+    }
+  }
+
+  const handleDownloadSelectedPhoto = async (photo: GalleryPhoto) => {
+    setIsDownloadingPhoto(true)
+    showToast(`Mengunduh ${photo.filename}...`)
+    try {
+      // 1. Coba download via proxy API untuk filename yang rapi
+      const proxyUrl = `/api/download-photo?id=${encodeURIComponent(photo.fileId || '')}&url=${encodeURIComponent(photo.url)}&filename=${encodeURIComponent(photo.filename)}`
+      const res = await fetch(proxyUrl)
+      if (res.ok) {
+        const blob = await res.blob()
+        const blobUrl = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = blobUrl
+        a.download = photo.filename || 'photo.jpg'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        window.URL.revokeObjectURL(blobUrl)
+        showToast(`Foto ${photo.filename} berhasil diunduh!`)
+        setIsDownloadingPhoto(false)
+        return
+      }
+    } catch (e) {
+      console.warn('Proxy download error, falling back:', e)
+    }
+
+    // 2. Fallback direct download link Google Drive
+    try {
+      const directUrl = photo.fileId
+        ? `https://drive.google.com/uc?export=download&id=${photo.fileId}`
+        : photo.url
+      const a = document.createElement('a')
+      a.href = directUrl
+      a.download = photo.filename || 'photo.jpg'
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      showToast(`Mengunduh ${photo.filename}...`)
+    } catch {
+      window.open(photo.url, '_blank')
+    } finally {
+      setIsDownloadingPhoto(false)
+    }
+  }
+
+  const [isZipping, setIsZipping] = useState(false)
+  const [zipProgressText, setZipProgressText] = useState('')
+
+  const handleDownloadSelectedAsZip = async (
+    photos: GalleryPhoto[],
+    clientName: string
+  ) => {
+    if (!photos || photos.length === 0) {
+      showToast('Tidak ada foto terpilih untuk diunduh.')
+      return
+    }
+
+    setIsZipping(true)
+    setZipProgressText(`Menyiapkan 0/${photos.length}...`)
+    showToast(`Mulai mengunduh ${photos.length} foto terpilih menjadi ZIP...`)
+
+    try {
+      const zipFiles: { name: string; data: Uint8Array }[] = []
+
+      for (let i = 0; i < photos.length; i++) {
+        const photo = photos[i]
+        setZipProgressText(`Mengunduh ${i + 1}/${photos.length}: ${photo.filename}`)
+
+        let fileData: Uint8Array | null = null
+
+        // 1. Coba download via proxy API internal
+        try {
+          const proxyUrl = `/api/download-photo?id=${encodeURIComponent(photo.fileId || '')}&url=${encodeURIComponent(photo.url)}&filename=${encodeURIComponent(photo.filename)}`
+          const res = await fetch(proxyUrl)
+          if (res.ok) {
+            const buf = await res.arrayBuffer()
+            fileData = new Uint8Array(buf)
+          }
+        } catch (e) {
+          console.warn(`Proxy fetch failed for ${photo.filename}:`, e)
+        }
+
+        // 2. Fallback direct download link jika proxy gagal
+        if (!fileData) {
+          try {
+            const fallbackUrl = photo.fileId
+              ? `https://drive.google.com/uc?export=download&id=${photo.fileId}`
+              : photo.url
+            const res = await fetch(fallbackUrl)
+            if (res.ok) {
+              const buf = await res.arrayBuffer()
+              fileData = new Uint8Array(buf)
+            }
+          } catch (e) {
+            console.warn(`Direct fetch fallback failed for ${photo.filename}:`, e)
+          }
+        }
+
+        if (fileData && fileData.length > 0) {
+          const cleanName = (photo.filename || `foto-${i + 1}.jpg`).replace(/[\\/:*?"<>|]/g, '_')
+          zipFiles.push({
+            name: cleanName,
+            data: fileData,
+          })
+        }
+      }
+
+      if (zipFiles.length === 0) {
+        showToast('Gagal mengunduh file foto dari Google Drive. Pastikan akses folder publik.')
+        setIsZipping(false)
+        setZipProgressText('')
+        return
+      }
+
+      setZipProgressText('Membuat arsip ZIP...')
+      const zipBlob = createZipBlob(zipFiles)
+      const zipUrl = window.URL.createObjectURL(zipBlob)
+
+      const safeClientName = (clientName || 'Klien')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+      const zipFilename = `Foto_Pilihan_${safeClientName}_${zipFiles.length}_foto.zip`
+
+      const a = document.createElement('a')
+      a.href = zipUrl
+      a.download = zipFilename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(zipUrl)
+
+      showToast(`Berhasil mengunduh ${zipFiles.length} foto dalam format ZIP!`)
+    } catch (err: any) {
+      console.error('ZIP download error:', err)
+      showToast(err?.message || 'Terjadi kesalahan saat memproses file ZIP.')
+    } finally {
+      setIsZipping(false)
+      setZipProgressText('')
+    }
+  }
+
   const handleWhatsappChange = (e: ChangeEvent<HTMLInputElement>) => {
     const sanitized = e.target.value.replace(/\D/g, '')
     setClientWhatsapp(sanitized)
@@ -323,23 +560,14 @@ Selamat menikmati momennya`
   const handleResetCreateForm = () => {
     setDriveLink('')
     setMaxPhotos('')
-    setSelectionDeadline('30 hari')
+    setIsMaxPhotosDropdownOpen(false)
     setClientName('')
-    setEventDate('')
-    setClientEmail('')
     setClientWhatsapp('')
     setAllowDownload(true)
     setScannedPhotos([])
     setIsScanningLink(false)
-    setScanResultSource('')
     setScanError(null)
     setDetectedFolderName('')
-  }
-
-  // Tutup modal dan reset data form otomatis
-  const handleCloseCreateModal = () => {
-    setIsCreateModalOpen(false)
-    handleResetCreateForm()
   }
 
   // Fungsi memindai link Google Drive dan menampilkan preview foto
@@ -362,7 +590,6 @@ Selamat menikmati momennya`
 
       if (result.success && result.photos && result.photos.length > 0) {
         setScannedPhotos(result.photos)
-        setScanResultSource(result.source || 'drive-api')
         if (result.folderName) {
           setDetectedFolderName(result.folderName)
           if (!clientName.trim()) {
@@ -404,104 +631,177 @@ Selamat menikmati momennya`
     return () => clearTimeout(debounceTimer)
   }, [driveLink])
 
-  const isFormValid =
-    driveLink.trim().length > 0 && clientWhatsapp.trim().length > 0
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!isFormValid) return
 
-    setIsScanningModalOpen(true)
-    setScanProgress(15)
-    setScanStatusText('Membaca folder Drive...')
+    let cleanDriveLink = driveLink.trim()
+    if (cleanDriveLink && !cleanDriveLink.startsWith('http://') && !cleanDriveLink.startsWith('https://')) {
+      cleanDriveLink = `https://${cleanDriveLink}`
+      setDriveLink(cleanDriveLink)
+    }
 
-    setTimeout(() => {
-      setScanProgress(45)
-      setScanStatusText('Membaca struktur folder & file foto dari Drive API...')
-    }, 800)
-
-    setTimeout(() => {
-      setScanProgress(75)
-      setScanStatusText('Mengalirkan direct stream link Google Drive CDN...')
-    }, 1800)
-
-    const driveResult =
-      scannedPhotos.length > 0
-        ? {
-            success: true,
-            folderId: extractDriveFolderId(driveLink) || '',
-            folderName: detectedFolderName || clientName,
-            photos: scannedPhotos,
-            source: scanResultSource || 'drive-api',
-          }
-        : await scanGoogleDriveFolder(driveLink, clientName)
-
-    if (!driveResult.success || driveResult.photos.length === 0) {
-      setTimeout(() => {
-        setIsScanningModalOpen(false)
-        showToast(
-          driveResult.error ||
-            'Folder Google Drive kosong atau terkunci. Pastikan akses folder diset: "Siapa saja yang memiliki link" (Pelihat).'
-        )
-      }, 1500)
+    if (!cleanDriveLink) {
+      showToast('Harap masukkan Link Folder Google Drive.')
+      document.getElementById('driveLink')?.focus()
+      return
+    }
+    if (!clientName.trim()) {
+      showToast('Harap masukkan Nama Klien / Acara.')
+      document.getElementById('clientName')?.focus()
+      return
+    }
+    if (!clientWhatsapp.trim()) {
+      showToast('Harap masukkan Nomor WhatsApp Klien.')
+      document.getElementById('clientWhatsapp')?.focus()
       return
     }
 
-    setTimeout(() => {
-      setScanProgress(100)
-      setScanStatusText(
-        `Berhasil memindai ${driveResult.photos.length} foto dari Google Drive!`
+    const parsedMaxPhotosInput = parseInt(maxPhotos) || 60
+    if (scannedPhotos.length > 0 && parsedMaxPhotosInput > scannedPhotos.length) {
+      showToast(
+        `Batas foto dipilih (${parsedMaxPhotosInput}) tidak boleh melebihi jumlah foto di Google Drive (${scannedPhotos.length} foto). Harap sesuaikan.`
       )
-    }, 2000)
+      document.getElementById('maxPhotos')?.focus()
+      return
+    }
 
-    setTimeout(() => {
-      setIsScanningModalOpen(false)
+    setIsScanningModalOpen(true)
+    setScanProgress(30)
+    setScanStatusText('Memproses galeri & sinkronisasi Google Drive...')
 
-      const finalClientName = clientName.trim() || detectedFolderName.trim() || 'Klien Baru'
-      const safeSlug = finalClientName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '') || 'klien'
-      const days = parseInt(selectionDeadline) || 30
+    try {
+      let photos: DrivePhotoItem[] = scannedPhotos
+      let detectedName = detectedFolderName
+
+      // Jika belum sempat dipindai real-time, lakukan scan cepat dengan batas waktu maks 3.5 detik
+      if (photos.length === 0 && cleanDriveLink) {
+        try {
+          const timeoutPromise = new Promise<{ success: boolean; photos: DrivePhotoItem[]; folderName?: string }>((resolve) =>
+            setTimeout(() => resolve({ success: false, photos: [] }), 3500)
+          )
+          const result = await Promise.race([
+            scanGoogleDriveFolder(cleanDriveLink, clientName),
+            timeoutPromise,
+          ])
+          if (result && Array.isArray(result.photos) && result.photos.length > 0) {
+            photos = result.photos
+            if (result.folderName) detectedName = result.folderName
+          }
+        } catch (_) {}
+      }
+
+      if (photos.length > 0 && parsedMaxPhotosInput > photos.length) {
+        setIsScanningModalOpen(false)
+        showToast(
+          `Batas foto dipilih (${parsedMaxPhotosInput}) tidak boleh melebihi jumlah foto di Google Drive (${photos.length} foto). Harap sesuaikan.`
+        )
+        document.getElementById('maxPhotos')?.focus()
+        return
+      }
+
+      setScanProgress(100)
+      setScanStatusText('Menyimpan data galeri...')
+
+      const finalClientName = clientName.trim() || detectedName.trim() || 'Klien Baru'
+      const safeSlug =
+        finalClientName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '') || 'klien'
 
       const newGalleryItem: GalleryData = {
         id: `gal-${Date.now()}`,
         clientName: finalClientName,
-        date: eventDate || new Date().toISOString().split('T')[0],
-        maxPhotos: parseInt(maxPhotos) || 60,
+        date: new Date().toISOString().split('T')[0],
+        maxPhotos: parsedMaxPhotosInput,
         selectedPhotos: 0,
-        remainingDays: days,
+        remainingDays: 0,
         status: 'Belum mulai',
         isClientViewed: false,
         whatsapp: clientWhatsapp,
-        driveLink: driveLink,
+        driveLink: cleanDriveLink,
         slug: safeSlug,
         shareToken: 'vtmsvc3urqfm',
-        coverUrl: driveResult.photos[0]?.url,
+        coverUrl: photos[0]?.url || '',
         selectedPhotoIds: [],
-        photos: driveResult.photos,
+        photos,
         allowDownload,
       }
 
+      // Simpan langsung ke storage dan update state seketika
       saveOrUpdateGallery(newGalleryItem)
-      setGalleries(getStoredGalleries())
+      const freshGalleries = getStoredGalleries()
+      setGalleries([...freshGalleries])
 
-      // Buka modal "Galeri siap dikirim"
+      setIsScanningModalOpen(false)
       openShareModalForGallery(newGalleryItem)
-      showToast(
-        `Berhasil memindai ${driveResult.photos.length} foto langsung dari Google Drive!`
-      )
 
-      // Reset form dan tutup popup buat galeri
+      if (photos.length > 0) {
+        showToast(`Berhasil menyimpan galeri & memindai ${photos.length} foto dari Google Drive!`)
+      } else {
+        showToast(
+          `Galeri "${finalClientName}" berhasil dibuat! (0 foto terdeteksi dari Drive. Anda dapat memindai ulang nanti di tombol Edit)`
+        )
+      }
+
       handleResetCreateForm()
-      setIsCreateModalOpen(false)
-      setActiveTab('galleries')
-    }, 3200)
+    } catch (err: any) {
+      setIsScanningModalOpen(false)
+      showToast(err?.message || 'Terjadi kesalahan saat memproses galeri.')
+    }
   }
 
+  // Pagination & Sorting logic (9 items per page, newest first)
+  const ITEMS_PER_PAGE = 9
+  const [currentPage, setCurrentPage] = useState(1)
+
+  // Filter rentang waktu khusus tab "Selesai dipilih": 'all' | 'older_1_month'
+  const [finishedTimeFilter, setFinishedTimeFilter] = useState<'all' | 'older_1_month'>('all')
+  const [isDeleteOlderModalOpen, setIsDeleteOlderModalOpen] = useState(false)
+  const [isDeletingOlder, setIsDeletingOlder] = useState(false)
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, filterStatus, finishedTimeFilter])
+
+  const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000
+
+  const isGalleryOlderThanOneMonth = (g: GalleryData): boolean => {
+    let timestamp = 0
+    if (g.date) {
+      const parsed = new Date(g.date).getTime()
+      if (!isNaN(parsed) && parsed > 0) timestamp = parsed
+    }
+    if (!timestamp) {
+      const match = g.id?.match(/gal-(\d+)/)
+      if (match && match[1]) {
+        const num = parseInt(match[1], 10)
+        if (!isNaN(num) && num > 0) timestamp = num
+      }
+    }
+    if (!timestamp) return false
+    return Date.now() - timestamp >= ONE_MONTH_MS
+  }
+
+  const getGalleryTime = (g: GalleryData): number => {
+    const match = g.id?.match(/gal-(\d+)/)
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10)
+      if (!isNaN(num)) return num
+    }
+    if (g.date) {
+      const t = new Date(g.date).getTime()
+      if (!isNaN(t)) return t
+    }
+    return 0
+  }
+
+  // Sorted: Newest created galleries first
+  const sortedGalleries = [...galleries].sort((a, b) => getGalleryTime(b) - getGalleryTime(a))
+
   // Filtered Galleries logic
-  const filteredGalleries = galleries.filter((g) => {
+  const filteredGalleries = sortedGalleries.filter((g) => {
     const q = searchQuery.toLowerCase().trim()
     const matchesQuery =
       !q ||
@@ -509,734 +809,323 @@ Selamat menikmati momennya`
       (g.slug || '').toLowerCase().includes(q) ||
       (g.whatsapp || '').includes(q)
 
+    const clean = (s?: string) => (s || '').trim().toLowerCase()
     const matchesStatus =
-      filterStatus === 'Semua' || g.status === filterStatus
+      filterStatus === 'Semua' || clean(g.status) === clean(filterStatus)
 
-    return matchesQuery && matchesStatus
+    const matchesTime =
+      filterStatus !== 'Selesai dipilih' ||
+      finishedTimeFilter === 'all' ||
+      isGalleryOlderThanOneMonth(g)
+
+    return matchesQuery && matchesStatus && matchesTime
   })
 
+  const totalPages = Math.ceil(filteredGalleries.length / ITEMS_PER_PAGE) || 1
+  const safeCurrentPage = Math.min(Math.max(currentPage, 1), totalPages)
+  const startIndex = (safeCurrentPage - 1) * ITEMS_PER_PAGE
+  const endIndex = startIndex + ITEMS_PER_PAGE
+  const paginatedGalleries = filteredGalleries.slice(startIndex, endIndex)
+
+  const getPageNumbers = (current: number, total: number) => {
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1)
+    }
+    if (current <= 4) {
+      return [1, 2, 3, 4, 5, '...', total]
+    }
+    if (current >= total - 3) {
+      return [1, '...', total - 4, total - 3, total - 2, total - 1, total]
+    }
+    return [1, '...', current - 1, current, current + 1, '...', total]
+  }
+
   // Stats calculation
+  const cleanStatus = (s?: string) => (s || '').trim().toLowerCase()
   const totalCount = galleries.length
-  const selectingCount = galleries.filter((g) => g.status === 'Sedang memilih').length
-  const finishedCount = galleries.filter((g) => g.status === 'Selesai dipilih').length
-  const viewedCount = galleries.filter((g) => g.isClientViewed).length
+  const selectingCount = galleries.filter(
+    (g) => cleanStatus(g.status) === 'sedang memilih'
+  ).length
+  const finishedCount = galleries.filter(
+    (g) => cleanStatus(g.status) === 'selesai dipilih'
+  ).length
+  const notStartedCount = galleries.filter(
+    (g) => cleanStatus(g.status) === 'belum mulai'
+  ).length
+  const olderThanOneMonthFinishedCount = galleries.filter(
+    (g) => cleanStatus(g.status) === 'selesai dipilih' && isGalleryOlderThanOneMonth(g)
+  ).length
+
+  const handleConfirmDeleteOlderGalleries = () => {
+    const targetGalleries = galleries.filter(
+      (g) => cleanStatus(g.status) === 'selesai dipilih' && isGalleryOlderThanOneMonth(g)
+    )
+    if (targetGalleries.length === 0) {
+      setIsDeleteOlderModalOpen(false)
+      return
+    }
+
+    setIsDeletingOlder(true)
+    try {
+      const targetIds = targetGalleries.map((g) => g.id)
+      const updated = deleteMultipleGalleries(targetIds)
+      setGalleries([...updated])
+      showToast(`Berhasil menghapus ${targetGalleries.length} galeri (> 1 bulan).`)
+      setIsDeleteOlderModalOpen(false)
+      setFinishedTimeFilter('all')
+    } catch (e: any) {
+      console.error('Delete multiple galleries error:', e)
+      showToast('Terjadi kesalahan saat menghapus galeri.')
+    } finally {
+      setIsDeletingOlder(false)
+    }
+  }
 
   return (
-    <div className="min-h-screen flex font-sans bg-[#0B0F19] text-[#F3F4F6]">
+    <div className="min-h-screen bg-[#0B0F19] text-slate-100 flex flex-col font-sans relative">
+      {/* Grid Pattern Background Overlay (Kotak-kotak halus) */}
+      <div
+        className="pointer-events-none fixed inset-0 z-0"
+        style={{
+          backgroundImage: `linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+             linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px)`,
+          backgroundSize: '48px 48px',
+        }}
+      />
+
       {/* =========================================================================
-          LEFT SIDEBAR: MODERN ENTERPRISE CMS NAVIGATION
+          NAVBAR ATAS
+          - Kiri: Placeholder Logo Livesostory
+          - Kanan: Menu Beranda | Icon & Button Logout
       ========================================================================= */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 w-64 flex flex-col bg-[#181D2D] text-slate-200 border-r border-slate-800 transition-transform duration-200 lg:static lg:translate-x-0 ${
-          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      <header
+        className={`sticky top-0 z-30 px-4 sm:px-8 py-3.5 flex items-center justify-between transition-all duration-300 ${
+          isScrolled
+            ? 'bg-[#0B0F19]/75 backdrop-blur-xl border-b border-slate-800/80 shadow-md shadow-black/20'
+            : 'bg-transparent border-b border-transparent'
         }`}
       >
-        {/* Brand Header */}
-        <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white flex items-center justify-center font-bold text-base shadow-sm">
-              L
-            </div>
-            <div>
-              <h1 className="font-bold text-sm text-white tracking-tight leading-none">
-                LIVE.IN
-              </h1>
-              <p className="text-[10px] text-blue-400 font-medium mt-1">
-                DASHBOARD CMS
-              </p>
+        {/* Sisi Kiri: Placeholder Logo Livesostory */}
+        <div className="flex items-center gap-3">
+          {/* 
+            PLACEHOLDER LOGO LIVESTORY:
+            Anda dapat langsung mengganti blok div ini dengan tag <img>:
+            <img src="/logo-livesostory.png" alt="Livesostory Logo" className="h-9 w-auto object-contain" />
+          */}
+          <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 p-0.5 shadow-md shadow-blue-500/20 flex items-center justify-center shrink-0">
+            <div className="h-full w-full bg-[#0B0F19] rounded-[10px] flex items-center justify-center text-white font-black text-sm tracking-wider">
+              LS
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsSidebarOpen(false)}
-            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
 
-        {/* Sidebar Navigation Links */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-1">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-3 py-2">
-            Menu Utama
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('galleries')
-              setIsSidebarOpen(false)
-            }}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeTab === 'galleries'
-                ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                : 'text-slate-300 hover:bg-[#1F2536] hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="h-7 w-7 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center">
-                <FolderKanban className="h-4 w-4" />
-              </div>
-              <span>Katalog Galeri</span>
+          <div className="flex flex-col">
+            <div className="flex items-center gap-1.5">
+              <span className="font-extrabold text-base tracking-wider text-white">
+                LIVESOSTORY
+              </span>
+              <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20">
+                .CO
+              </span>
             </div>
-            <span className="text-[10px] bg-[#141824] text-slate-300 px-2 py-0.5 rounded-full font-mono font-bold">
-              {galleries.length}
+            <span className="text-[10px] text-slate-400 font-medium tracking-wide -mt-0.5">
+              Admin Selection Studio
             </span>
-          </button>
+          </div>
+        </div>
+
+        {/* Sisi Kanan: Menu Beranda | Icon & Button Logout */}
+        <div className="flex items-center gap-3 sm:gap-4">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600/15 border border-blue-500/30 text-blue-400 font-semibold text-xs sm:text-sm">
+            <Home className="h-4 w-4" />
+            <span>Beranda</span>
+          </div>
+
+          <div className="h-4 w-px bg-slate-700" />
 
           <button
             type="button"
-            onClick={() => {
-              setActiveTab('analytics')
-              setIsSidebarOpen(false)
-            }}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-              activeTab === 'analytics'
-                ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                : 'text-slate-300 hover:bg-[#1F2536] hover:text-white'
-            }`}
+            onClick={handleLogout}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-700/60 hover:border-rose-500/30 text-xs sm:text-sm font-medium transition-all cursor-pointer"
+            title="Keluar dari akun admin"
           >
-            <div className="flex items-center gap-3">
-              <div className="h-7 w-7 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center">
-                <BarChart3 className="h-4 w-4" />
-              </div>
-              <span>Statistik & Status</span>
-            </div>
+            <LogOut className="h-4 w-4" />
+            <span>Logout</span>
           </button>
         </div>
-      </aside>
-
-      {/* Mobile backdrop */}
-      {isSidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/60 lg:hidden backdrop-blur-xs"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
+      </header>
 
       {/* =========================================================================
-          MAIN CMS CANVAS: RIGHT SIDE
+          MAIN WORKSPACE CANVAS:
+          GAMBAR 2: STATS CARDS (POSISI ATAS)
+          GAMBAR 1: FORM CREATE (POSISI KIRI) | GAMBAR 3: KATALOG (POSISI KANAN)
       ========================================================================= */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Top Navbar */}
-        <header className="sticky top-0 z-20 px-4 sm:px-8 py-3.5 border-b flex items-center justify-between bg-[#1E293B]/95 backdrop-blur-sm border-slate-800 text-white">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setIsSidebarOpen(true)}
-              className="lg:hidden p-2 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-            <div>
-              <h2 className="font-bold text-base sm:text-lg text-white leading-tight">
-                Dashboard
-              </h2>
-            </div>
-          </div>
-
-          <div className="flex items-center">
-            {/* User profile dropdown pill with logout */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setIsProfileMenuOpen((prev) => !prev)}
-                className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer select-none"
-              >
-                <div className="h-7 w-7 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
-                  {adminEmail.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-xs font-semibold text-slate-200 hidden md:inline">
-                  Admin
-                </span>
-                <ChevronDown
-                  className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
-                    isProfileMenuOpen ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {/* Dropdown Menu */}
-              {isProfileMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setIsProfileMenuOpen(false)}
-                  />
-                  <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1E293B] shadow-xl p-1.5 z-50 animate-in fade-in zoom-in-95">
-                    <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-700">
-                      <p className="text-[10px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                        Masuk Sebagai
-                      </p>
-                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate mt-0.5">
-                        {adminEmail}
-                      </p>
-                    </div>
-
-                    <div className="pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsProfileMenuOpen(false)
-                          handleLogout()
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                      >
-                        <LogOut className="h-4 w-4" />
-                        <span>Keluar</span>
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </header>
-
-        {/* Page Content Body */}
-        <main className="p-4 sm:p-7 space-y-6 flex-1">
+      <main className="relative z-10 p-4 sm:p-6 lg:p-7 max-w-[1720px] w-full mx-auto flex-1 space-y-6">
           {/* =========================================================================
               4 VIBRANT METRIC STAT CARDS (Exact match to reference image)
           ========================================================================= */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Stat 1: Total Galeri (Vibrant Blue Card) */}
-              <div className="bg-gradient-to-r from-[#1E88E5] to-[#2196F3] text-white rounded-xl p-5 shadow-sm flex flex-col justify-between">
+              {/* Stat 1: Total Galeri */}
+              <div
+                onClick={() => setFilterStatus('Semua')}
+                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                  filterStatus === 'Semua'
+                    ? 'border-blue-500/60 ring-1 ring-blue-500/30'
+                    : 'border-slate-800/90 hover:border-slate-700/80'
+                }`}
+                title="Tampilkan semua galeri"
+              >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-white/85 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                       TOTAL GALERI
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {totalCount}
                     </p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {totalCount} total galeri aktif
+                    </p>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-white text-[#2196F3] flex items-center justify-center shadow-xs">
-                    <FolderKanban className="h-6 w-6 stroke-[2.5]" />
+                  <div className="h-11 w-11 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center shadow-xs">
+                    <FolderKanban className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-white/20">
-                  <div className="h-1 w-full bg-white/20 rounded-full overflow-hidden">
-                    <div className="h-full bg-white rounded-full w-full" />
+                <div className="mt-4 pt-2 border-t border-slate-800">
+                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500 rounded-full w-full" />
                   </div>
                 </div>
               </div>
 
-              {/* Stat 2: Sedang Memilih (Vibrant Orange Card) */}
-              <div className="bg-gradient-to-r from-[#F57C00] to-[#FF9800] text-white rounded-xl p-5 shadow-sm flex flex-col justify-between">
+              {/* Stat 2: Sedang Memilih */}
+              <div
+                onClick={() => setFilterStatus('Sedang memilih')}
+                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                  filterStatus === 'Sedang memilih'
+                    ? 'border-amber-500/60 ring-1 ring-amber-500/30'
+                    : 'border-slate-800/90 hover:border-slate-700/80'
+                }`}
+                title="Filter galeri yang sedang memilih"
+              >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-white/85 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                       SEDANG MEMILIH
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {selectingCount}
                     </p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {selectingCount} dari {totalCount} galeri
+                    </p>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-white text-[#FF9800] flex items-center justify-center shadow-xs">
-                    <Clock className="h-6 w-6 stroke-[2.5]" />
+                  <div className="h-11 w-11 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center shadow-xs">
+                    <Clock className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-white/20">
-                  <div className="h-1 w-full bg-white/20 rounded-full overflow-hidden">
+                <div className="mt-4 pt-2 border-t border-slate-800">
+                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
                     <div
                       style={{
                         width: `${totalCount > 0 ? (selectingCount / totalCount) * 100 : 0}%`,
                       }}
-                      className="h-full bg-white rounded-full"
+                      className="h-full bg-amber-500 rounded-full"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Stat 3: Selesai Dipilih (Vibrant Purple Card) */}
-              <div className="bg-gradient-to-r from-[#7B1FA2] to-[#9C27B0] text-white rounded-xl p-5 shadow-sm flex flex-col justify-between">
+              {/* Stat 3: Selesai Dipilih */}
+              <div
+                onClick={() => setFilterStatus('Selesai dipilih')}
+                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                  filterStatus === 'Selesai dipilih'
+                    ? 'border-emerald-500/60 ring-1 ring-emerald-500/30'
+                    : 'border-slate-800/90 hover:border-slate-700/80'
+                }`}
+                title="Filter galeri yang selesai dipilih"
+              >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-white/85 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                       SELESAI DIPILIH
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {finishedCount}
                     </p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {finishedCount} dari {totalCount} galeri
+                    </p>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-white text-[#9C27B0] flex items-center justify-center shadow-xs">
-                    <CheckCircle2 className="h-6 w-6 stroke-[2.5]" />
+                  <div className="h-11 w-11 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center shadow-xs">
+                    <CheckCircle2 className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-white/20">
-                  <div className="h-1 w-full bg-white/20 rounded-full overflow-hidden">
+                <div className="mt-4 pt-2 border-t border-slate-800">
+                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
                     <div
                       style={{
                         width: `${totalCount > 0 ? (finishedCount / totalCount) * 100 : 0}%`,
                       }}
-                      className="h-full bg-white rounded-full"
+                      className="h-full bg-emerald-500 rounded-full"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Stat 4: Dilihat Klien (Vibrant Indigo Card) */}
-              <div className="bg-gradient-to-r from-[#303F9F] to-[#3F51B5] text-white rounded-xl p-5 shadow-sm flex flex-col justify-between">
+              {/* Stat 4: Belum Mulai */}
+              <div
+                onClick={() => setFilterStatus('Belum mulai')}
+                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                  filterStatus === 'Belum mulai'
+                    ? 'border-purple-500/60 ring-1 ring-purple-500/30'
+                    : 'border-slate-800/90 hover:border-slate-700/80'
+                }`}
+                title="Filter galeri yang belum mulai"
+              >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-white/85 uppercase tracking-wider">
-                      DILIHAT KLIEN
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      BELUM MULAI
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
-                      {viewedCount}
+                      {notStartedCount}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {notStartedCount} dari {totalCount} galeri
                     </p>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-white text-[#3F51B5] flex items-center justify-center shadow-xs">
-                    <Eye className="h-6 w-6 stroke-[2.5]" />
+                  <div className="h-11 w-11 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center shadow-xs">
+                    <AlertCircle className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-white/20">
-                  <div className="h-1 w-full bg-white/20 rounded-full overflow-hidden">
+                <div className="mt-4 pt-2 border-t border-slate-800">
+                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
                     <div
                       style={{
-                        width: `${totalCount > 0 ? (viewedCount / totalCount) * 100 : 0}%`,
+                        width: `${totalCount > 0 ? (notStartedCount / totalCount) * 100 : 0}%`,
                       }}
-                      className="h-full bg-white rounded-full"
+                      className="h-full bg-purple-500 rounded-full"
                     />
                   </div>
                 </div>
               </div>
             </div>
 
+        {/* =========================================================================
+            2-COLUMN WORKSPACE:
+            - SISI KIRI (GAMBAR 1): FORM BUAT GALERI BARU
+            - SISI KANAN (GAMBAR 3): KATALOG GALERI
+        ========================================================================= */}
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
           {/* =========================================================================
-              TAB 1: SEMUA GALERI (DEFAULT VIEW)
+              GAMBAR 1: FORM BUAT GALERI BARU & SINKRONISASI DRIVE (POSISI KIRI)
           ========================================================================= */}
-          {activeTab === 'galleries' && (
-            <div className="space-y-5">
-              {/* Header section with title & "+ Buat Galeri Baru" button */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                    Katalog Galeri Foto
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Kelola dan pantau seluruh sesi pemilihan foto klien.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleResetCreateForm()
-                    setIsCreateModalOpen(true)
-                  }}
-                  className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer shrink-0"
-                >
-                  <PlusCircle className="h-4 w-4" />
-                  <span>+ Buat Galeri Baru</span>
-                </button>
-              </div>
-
-              {/* Search & Filter Bar */}
-              <div className="p-4 rounded-xl border flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-[#1E293B] border-slate-700/80">
-                {/* Search Box */}
-                <div className="relative flex-1">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Search className="h-4 w-4" />
-                  </div>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Cari nama klien, slug, atau nomor WhatsApp..."
-                    className="w-full pl-9 pr-8 py-2 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
-                  />
-                  {searchQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setSearchQuery('')}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Filter Status Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
-                  {(['Semua', 'Belum mulai', 'Sedang memilih', 'Selesai dipilih'] as const).map(
-                    (st) => (
-                      <button
-                        key={st}
-                        type="button"
-                        onClick={() => setFilterStatus(st)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
-                          filterStatus === st
-                            ? 'bg-blue-600 text-white shadow-xs'
-                            : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        {st}
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-
-              {/* Gallery Cards Grid */}
-              {filteredGalleries.length === 0 ? (
-                <div className="p-12 text-center rounded-xl border bg-[#1E293B] border-slate-700">
-                  <div className="h-12 w-12 rounded-full bg-blue-950/40 text-blue-500 mx-auto flex items-center justify-center mb-3">
-                    <Search className="h-6 w-6" />
-                  </div>
-                  <h3 className="text-base font-bold text-white">
-                    Tidak Ada Galeri yang Cocok
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                    {searchQuery
-                      ? `Tidak ditemukan galeri dengan kata kunci "${searchQuery}". Coba kata pencarian lain.`
-                      : 'Belum ada galeri foto yang dibuat.'}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('')
-                      setFilterStatus('Semua')
-                      handleResetCreateForm()
-                      setIsCreateModalOpen(true)
-                    }}
-                    className="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-xs"
-                  >
-                    + Buat Galeri Baru
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                  {filteredGalleries.map((gallery) => {
-                    const selectedCount = gallery.selectedPhotos || 0
-                    const maxP = gallery.maxPhotos || 60
-                    const progressPercent = Math.min(100, Math.round((selectedCount / maxP) * 100))
-
-                    return (
-                      <div
-                        key={gallery.id}
-                        className="rounded-xl border transition-all hover:shadow-md flex flex-col justify-between overflow-hidden bg-[#1E293B] border-slate-700/80 hover:border-slate-600 shadow-xs"
-                      >
-                        <div className="p-5 space-y-4">
-                          {/* Client Info & Cover */}
-                          <div className="flex gap-3.5 items-start">
-                            <div className="relative h-20 w-20 shrink-0 rounded-lg overflow-hidden border border-slate-700 bg-slate-900">
-                              {gallery.coverUrl ? (
-                                <img
-                                  src={gallery.coverUrl}
-                                  alt={gallery.clientName}
-                                  className="h-full w-full object-cover"
-                                  onError={(e) => {
-                                    e.currentTarget.style.display = 'none'
-                                  }}
-                                />
-                              ) : (
-                                <div className="h-full w-full flex items-center justify-center text-slate-400 text-xs">
-                                  No Photo
-                                </div>
-                              )}
-                              <span className="absolute bottom-0 inset-x-0 bg-black/70 text-white text-[9px] text-center font-medium py-0.5 backdrop-blur-xs">
-                                {gallery.photos?.length || 0} FOTO
-                              </span>
-                            </div>
-
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-bold text-base text-white truncate">
-                                {gallery.clientName}
-                              </h4>
-                              <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
-                                <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                <span>{gallery.date || 'Tanpa Tanggal'}</span>
-                              </p>
-                              <p className="text-xs text-slate-400 flex items-center gap-1.5 truncate mt-0.5">
-                                <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                <span>{gallery.whatsapp || '-'}</span>
-                              </p>
-
-                              {/* Status Badge */}
-                              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-                                <span
-                                  className={`inline-block px-2.5 py-0.5 text-[11px] font-semibold rounded-full ${
-                                    gallery.status === 'Selesai dipilih'
-                                      ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-800'
-                                      : gallery.status === 'Sedang memilih'
-                                      ? 'bg-amber-950/40 text-amber-300 border border-amber-800'
-                                      : 'bg-slate-800 text-slate-300 border border-slate-700'
-                                  }`}
-                                >
-                                  {gallery.status}
-                                </span>
-
-                                {gallery.isClientViewed && (
-                                  <span className="inline-block px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-950/40 text-blue-300 border border-blue-800">
-                                    Dilihat Klien
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Progress Meter */}
-                          <div className="p-3 rounded-lg border bg-slate-900/60 border-slate-700/60">
-                            <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 mb-1.5">
-                              <span className="font-medium">Foto Dipilih:</span>
-                              <span className="font-bold text-slate-900 dark:text-white">
-                                {selectedCount} / {maxP} ({progressPercent}%)
-                              </span>
-                            </div>
-                            <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
-                              <div
-                                style={{ width: `${progressPercent}%` }}
-                                className="h-full bg-blue-600 rounded-full transition-all duration-300"
-                              />
-                            </div>
-                            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-2">
-                              <span>Sisa waktu: {gallery.remainingDays} hari</span>
-                              <span>{gallery.allowDownload ? 'Download ON' : 'Download OFF'}</span>
-                            </div>
-                          </div>
-
-                          {/* Action Buttons */}
-                          <div className="pt-1 grid grid-cols-2 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openShareModalForGallery(gallery)}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                            >
-                              <Share2 className="h-3.5 w-3.5" />
-                              <span className="truncate">Bagikan WA</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleOpenDriveFolder(gallery)}
-                              className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                            >
-                              <Folder className="h-3.5 w-3.5" />
-                              <span className="truncate">Buka Drive</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(gallery)}
-                              className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                              <span>Edit</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setGalleryToDelete(gallery)}
-                              className="border border-rose-200 dark:border-rose-900/40 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-rose-600 dark:text-rose-400 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              <span>Hapus</span>
-                            </button>
-                          </div>
-
-                          {/* Direct Links View */}
-                          <div className="flex items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-700/60">
-                            <a
-                              href={`/livesotory-co/${gallery.slug}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="flex-1 py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-300 text-xs font-medium text-center flex items-center justify-center gap-1.5 transition-colors"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>Lihat Seleksi</span>
-                            </a>
-                            <a
-                              href={`/${gallery.slug}-3`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="flex-1 py-1.5 px-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-300 text-xs font-medium text-center flex items-center justify-center gap-1.5 transition-colors"
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                              <span>Lihat Album</span>
-                            </a>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-          {/* =========================================================================
-              TAB 3: ANALYTICS & STATUS BREAKDOWN
-          ========================================================================= */}
-          {activeTab === 'analytics' && (
-            <div className="space-y-6">
-              <div
-                className={`p-6 rounded-xl border ${
-                  isDarkMode
-                    ? 'bg-[#1E293B] border-slate-700'
-                    : 'bg-white border-slate-200/80 shadow-xs'
-                }`}
-              >
-                <div className="border-b border-slate-100 dark:border-slate-700 pb-3 mb-5 flex items-center justify-between">
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Ringkasan Aktivitas Pemilihan Klien
-                  </h3>
-                  <span className="text-xs text-blue-600 dark:text-blue-400 font-semibold bg-blue-50 dark:bg-blue-950/60 px-2.5 py-1 rounded-full">
-                    Sinkronisasi Otomatis
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div
-                    className={`p-4 rounded-xl border ${
-                      isDarkMode
-                        ? 'bg-slate-900/60 border-slate-700'
-                        : 'bg-slate-50 border-slate-100'
-                    }`}
-                  >
-                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      Belum Selesai
-                    </p>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                      {galleries.filter((g) => g.status !== 'Selesai dipilih').length}
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Galeri yang masih dalam proses pemilihan oleh klien.
-                    </p>
-                  </div>
-
-                  <div
-                    className={`p-4 rounded-xl border ${
-                      isDarkMode
-                        ? 'bg-slate-900/60 border-slate-700'
-                        : 'bg-slate-50 border-slate-100'
-                    }`}
-                  >
-                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      Siap Diedit / Selesai
-                    </p>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                      {finishedCount}
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Klien sudah selesai memilih batas foto maksimal.
-                    </p>
-                  </div>
-
-                  <div
-                    className={`p-4 rounded-xl border ${
-                      isDarkMode
-                        ? 'bg-slate-900/60 border-slate-700'
-                        : 'bg-slate-50 border-slate-100'
-                    }`}
-                  >
-                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      Tingkat Dilihat Klien
-                    </p>
-                    <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">
-                      {totalCount > 0 ? Math.round((viewedCount / totalCount) * 100) : 0}%
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                      Persentase klien yang sudah membuka album mereka.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Table of active selections */}
-              <div
-                className={`rounded-xl border overflow-hidden ${
-                  isDarkMode
-                    ? 'bg-[#1E293B] border-slate-700'
-                    : 'bg-white border-slate-200/80 shadow-xs'
-                }`}
-              >
-                <div
-                  className={`px-5 py-3.5 border-b font-semibold text-xs text-slate-900 dark:text-white ${
-                    isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-100 bg-slate-50/50'
-                  }`}
-                >
-                  Tabel Status Klien & Batas Waktu
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr
-                        className={`border-b text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider ${
-                          isDarkMode ? 'border-slate-700 bg-slate-900/60' : 'border-slate-100 bg-slate-50/80'
-                        }`}
-                      >
-                        <th className="p-3.5">Klien</th>
-                        <th className="p-3.5">Status</th>
-                        <th className="p-3.5">Foto Dipilih</th>
-                        <th className="p-3.5">Sisa Hari</th>
-                        <th className="p-3.5 text-right">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
-                      {galleries.map((gal) => (
-                        <tr
-                          key={gal.id}
-                          className="hover:bg-slate-50/60 dark:hover:bg-slate-750 transition-colors"
-                        >
-                          <td className="p-3.5 font-semibold text-slate-900 dark:text-white">
-                            {gal.clientName}
-                          </td>
-                          <td className="p-3.5">
-                            <span
-                              className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold ${
-                                gal.status === 'Selesai dipilih'
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-                                  : gal.status === 'Sedang memilih'
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
-                                  : 'bg-slate-100 text-slate-700 border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
-                              }`}
-                            >
-                              {gal.status}
-                            </span>
-                          </td>
-                          <td className="p-3.5 text-slate-700 dark:text-slate-300 font-semibold">
-                            {gal.selectedPhotos || 0} / {gal.maxPhotos}
-                          </td>
-                          <td className="p-3.5 text-slate-500 dark:text-slate-400">
-                            {gal.remainingDays} hari
-                          </td>
-                          <td className="p-3.5 text-right">
-                            <button
-                              type="button"
-                              onClick={() => openShareModalForGallery(gal)}
-                              className="px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-900/60 text-xs font-semibold transition-colors cursor-pointer"
-                            >
-                              Kirim WA
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-        </main>
-      </div>
-
-      {/* =========================================================================
-          MODALS & OVERLAYS (CLEAN MODERN CMS STYLE)
-      ========================================================================= */}
-
-      {/* 0. Modal Popup Buat Galeri Baru & Sinkronisasi Drive (Backdrop Blur) */}
-      {isCreateModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
-          onClick={handleCloseCreateModal}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-2xl max-h-[92vh] rounded-2xl border border-slate-700/80 bg-[#1E293B] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
-          >
-            {/* Modal Header */}
-            <div className="border-b border-slate-700/80 px-6 py-4.5 flex items-center justify-between shrink-0 bg-[#1E293B]">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center">
+          <div className="w-full lg:w-[420px] xl:w-[460px] shrink-0 lg:sticky lg:top-20">
+            <div className="rounded-2xl border border-slate-700/80 bg-[#1E293B] text-white shadow-xl p-5 sm:p-6">
+              {/* Form Header */}
+              <div className="border-b border-slate-700/80 pb-4 mb-5 flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center shrink-0">
                   <PlusCircle className="h-5 w-5" />
                 </div>
                 <div>
@@ -1248,19 +1137,10 @@ Selamat menikmati momennya`
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleCloseCreateModal}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
 
-            {/* Modal Scrollable Body */}
-            <div className="p-6 overflow-y-auto flex-1">
-              <form onSubmit={handleSubmit} className="space-y-5">
-                {/* Field 1: Link Folder Google Drive */}
+              {/* Form Body */}
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {/* 1. Link Folder Google Drive */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label
@@ -1277,11 +1157,11 @@ Selamat menikmati momennya`
                   <div className="relative flex items-center">
                     <input
                       id="driveLink"
-                      type="url"
+                      type="text"
                       required
                       value={driveLink}
                       onChange={(e) => setDriveLink(e.target.value)}
-                      placeholder="Tempel tautan folder Google Drive (contoh: https://drive.google.com/drive/folders/...)"
+                      placeholder="Tempel tautan folder Google Drive..."
                       className="w-full py-2.5 pl-3.5 pr-24 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
                     />
                     <button
@@ -1337,140 +1217,204 @@ Selamat menikmati momennya`
                   )}
                 </div>
 
-                {/* Field 2 & 3: Batas Maksimal & Batas Waktu */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label
-                      htmlFor="maxPhotos"
-                      className="block text-xs font-semibold text-slate-200 mb-1.5"
-                    >
-                      2. Batas Maksimal Foto Dipilih
-                    </label>
-                    <input
-                      id="maxPhotos"
-                      type="number"
-                      min={1}
-                      max={2000}
-                      value={maxPhotos}
-                      onChange={(e) => setMaxPhotos(e.target.value)}
-                      placeholder="60 (Bawaan)"
-                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
-                    />
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Kosongkan untuk otomatis menggunakan 60 foto.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="selectionDeadline"
-                      className="block text-xs font-semibold text-slate-200 mb-1.5"
-                    >
-                      3. Batas Waktu Klien Memilih
-                    </label>
-                    <select
-                      id="selectionDeadline"
-                      value={selectionDeadline}
-                      onChange={(e) => setSelectionDeadline(e.target.value)}
-                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white"
-                    >
-                      <option value="7 hari">7 Hari (Cepat)</option>
-                      <option value="14 hari">14 Hari (2 Minggu)</option>
-                      <option value="30 hari">30 Hari (Standar)</option>
-                      <option value="60 hari">60 Hari (2 Bulan)</option>
-                      <option value="90 hari">90 Hari (3 Bulan)</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Field 4 & 5: Nama Klien & Tanggal Acara */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
+                {/* 2. Nama Klien / Acara */}
+                <div>
+                  <div className="flex items-center mb-1.5">
                     <label
                       htmlFor="clientName"
-                      className="block text-xs font-semibold text-slate-200 mb-1.5"
+                      className="text-xs font-semibold text-slate-200 flex items-center gap-2"
                     >
-                      4. Nama Klien / Acara
-                    </label>
-                    <input
-                      id="clientName"
-                      type="text"
-                      value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
-                      placeholder="Contoh: Wedding Sarah & Kevin / Wisuda Maya"
-                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
-                    />
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Jika kosong, otomatis mengikuti nama folder Google Drive.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="eventDate"
-                      className="block text-xs font-semibold text-slate-200 mb-1.5"
-                    >
-                      5. Tanggal Acara
-                    </label>
-                    <input
-                      id="eventDate"
-                      type="date"
-                      value={eventDate}
-                      onChange={(e) => setEventDate(e.target.value)}
-                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Field 6 & 7: WhatsApp & Email Klien */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label
-                      htmlFor="clientWhatsapp"
-                      className="text-xs font-semibold text-slate-200 flex items-center justify-between mb-1.5"
-                    >
-                      <span>6. Nomor WhatsApp Klien</span>
+                      <span>2. Nama Klien / Acara</span>
                       <span className="text-[10px] text-rose-500 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded">
                         Wajib
                       </span>
                     </label>
+                  </div>
+                  <input
+                    id="clientName"
+                    type="text"
+                    required
+                    value={clientName}
+                    onChange={(e) => setClientName(e.target.value)}
+                    placeholder="Masukkan Nama..."
+                    className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Jika belum diisi, otomatis mengikuti nama folder Google Drive yang dipindai.
+                  </p>
+                </div>
+
+                {/* 3. Nomor WhatsApp & 4. Batas Maksimal Foto */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div>
+                    <div className="flex items-center mb-1.5">
+                      <label
+                        htmlFor="clientWhatsapp"
+                        className="text-xs font-semibold text-slate-200 flex items-center gap-2"
+                      >
+                        <span>3. Nomor WhatsApp Klien</span>
+                        <span className="text-[10px] text-rose-500 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded">
+                          Wajib
+                        </span>
+                      </label>
+                    </div>
                     <input
                       id="clientWhatsapp"
                       type="tel"
                       required
                       value={clientWhatsapp}
                       onChange={handleWhatsappChange}
-                      placeholder="Contoh: 081234567890"
+                      placeholder="Masukkan 08xxx..."
                       className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
                     />
                   </div>
 
                   <div>
                     <label
-                      htmlFor="clientEmail"
+                      htmlFor="maxPhotos"
                       className="block text-xs font-semibold text-slate-200 mb-1.5"
                     >
-                      7. Email Klien (Opsional)
+                      4. Batas Maksimal Foto Dipilih
                     </label>
-                    <input
-                      id="clientEmail"
-                      type="email"
-                      value={clientEmail}
-                      onChange={(e) => setClientEmail(e.target.value)}
-                      placeholder="Contoh: nama@email.com"
-                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
-                    />
+                    <div className="relative" ref={maxPhotosContainerRef}>
+                      <div
+                        className={`flex items-center rounded-lg border bg-slate-900 transition-all focus-within:ring-2 overflow-hidden ${
+                          scannedPhotos.length > 0 && Boolean(maxPhotos) && parseInt(maxPhotos) > scannedPhotos.length
+                            ? 'border-rose-500 focus-within:ring-rose-500/20 focus-within:border-rose-500'
+                            : 'border-slate-700 focus-within:ring-blue-500/20 focus-within:border-blue-500'
+                        }`}
+                      >
+                        <input
+                          id="maxPhotos"
+                          type="number"
+                          min={1}
+                          max={scannedPhotos.length > 0 ? scannedPhotos.length : 5000}
+                          value={maxPhotos}
+                          onChange={(e) => setMaxPhotos(e.target.value)}
+                          placeholder={scannedPhotos.length > 0 ? `Maks ${scannedPhotos.length}` : '...'}
+                          className={`flex-1 py-2.5 px-3 text-xs sm:text-sm bg-transparent placeholder-slate-500 focus:outline-none ${
+                            scannedPhotos.length > 0 && Boolean(maxPhotos) && parseInt(maxPhotos) > scannedPhotos.length
+                              ? 'text-rose-400 font-semibold'
+                              : 'text-white'
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          onClick={toggleMaxPhotosDropdown}
+                          className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800/80 border-l border-slate-700 transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
+                          title="Buka pilihan preset"
+                        >
+                          <span className="hidden sm:inline">Pilih</span>
+                          <ChevronDown
+                            className={`h-4 w-4 transition-transform duration-200 ${
+                              isMaxPhotosDropdownOpen ? 'rotate-180 text-blue-400' : ''
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Info & Warning jika melebihi atau informasi jumlah foto di Drive */}
+                      {scannedPhotos.length > 0 && Boolean(maxPhotos) && parseInt(maxPhotos) > scannedPhotos.length ? (
+                        <p className="text-[11px] text-rose-400 mt-1.5 flex items-center gap-1 font-medium leading-tight">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                          <span>Jumlah tidak boleh melebihi foto di Drive ({scannedPhotos.length} foto).</span>
+                        </p>
+                      ) : scannedPhotos.length > 0 ? (
+                        <p className="text-[11px] text-blue-400 mt-1.5 font-medium leading-tight">
+                          Tersedia: {scannedPhotos.length} foto
+                        </p>
+                      ) : null}
+
+                      {/* Dropdown Menu Responsif */}
+                      {isMaxPhotosDropdownOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-20"
+                            onClick={() => setIsMaxPhotosDropdownOpen(false)}
+                          />
+                          <div
+                            className={`absolute right-0 ${
+                              dropdownPlacement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+                            } z-30 w-full sm:w-[260px] max-w-[calc(100vw-2.5rem)] max-h-56 overflow-y-auto rounded-xl border border-slate-700 bg-[#1E293B] shadow-2xl p-1.5 animate-in fade-in zoom-in-95`}
+                          >
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1 flex items-center justify-between">
+                              <span>Pilih Preset Cepat:</span>
+                              {scannedPhotos.length > 0 && (
+                                <span className="text-blue-400 lowercase font-medium">({scannedPhotos.length} di drive)</span>
+                              )}
+                            </div>
+
+                            {/* Opsi preset semua foto yang ada di Drive - Tampil di atas agar langsung terlihat */}
+                            {scannedPhotos.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMaxPhotos(String(scannedPhotos.length))
+                                  setIsMaxPhotosDropdownOpen(false)
+                                }}
+                                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between mb-1 transition-colors cursor-pointer ${
+                                  maxPhotos === String(scannedPhotos.length)
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30'
+                                }`}
+                              >
+                                <span>Semua Foto ({scannedPhotos.length} Foto)</span>
+                                {maxPhotos === String(scannedPhotos.length) && (
+                                  <Check className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            )}
+
+                            {[
+                              { val: '20', label: '20 Foto' },
+                              { val: '50', label: '50 Foto' },
+                              { val: '60', label: '60 Foto' },
+                              { val: '80', label: '80 Foto' },
+                            ].map((item) => {
+                              const isExceeded =
+                                scannedPhotos.length > 0 && parseInt(item.val) > scannedPhotos.length
+                              return (
+                                <button
+                                  key={item.val}
+                                  type="button"
+                                  disabled={isExceeded}
+                                  onClick={() => {
+                                    if (isExceeded) return
+                                    setMaxPhotos(item.val)
+                                    setIsMaxPhotosDropdownOpen(false)
+                                  }}
+                                  className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                                    isExceeded
+                                      ? 'opacity-40 cursor-not-allowed text-slate-500'
+                                      : maxPhotos === item.val
+                                      ? 'bg-blue-600 text-white font-semibold cursor-pointer'
+                                      : 'text-slate-200 hover:bg-slate-800 hover:text-white cursor-pointer'
+                                  }`}
+                                >
+                                  <span>{item.label}</span>
+                                  {isExceeded ? (
+                                    <span className="text-[10px] text-rose-400">(Melebihi Drive)</span>
+                                  ) : (
+                                    maxPhotos === item.val && <Check className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
 
                 {/* Checkbox Download */}
-                <div className="p-4 rounded-lg border bg-slate-900/60 border-slate-700">
+                <div className="p-3.5 rounded-lg border bg-slate-900/60 border-slate-700">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={allowDownload}
                       onChange={(e) => setAllowDownload(e.target.checked)}
-                      className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-500 cursor-pointer"
                     />
                     <div>
                       <span className="text-xs font-semibold text-white">
@@ -1487,14 +1431,14 @@ Selamat menikmati momennya`
                 <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-700">
                   <button
                     type="button"
-                    onClick={handleCloseCreateModal}
+                    onClick={handleResetCreateForm}
                     className="px-4 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
-                    disabled={!isFormValid || isScanningModalOpen}
+                    disabled={isScanningModalOpen}
                     className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold transition-colors shadow-xs cursor-pointer flex items-center gap-2"
                   >
                     <Check className="h-4 w-4 stroke-[2.5]" />
@@ -1504,8 +1448,372 @@ Selamat menikmati momennya`
               </form>
             </div>
           </div>
-        </div>
-      )}
+
+          {/* =========================================================================
+              GAMBAR 3: KATALOG GALERI (POSISI KANAN)
+          ========================================================================= */}
+          <div className="flex-1 min-w-0 space-y-4">
+
+              {/* Search & Filter Bar */}
+              <div className="p-4 rounded-xl border flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-[#1E293B] border-slate-700/80">
+                {/* Search Box */}
+                <div className="relative flex-1">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Search className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Cari nama klien, slug, atau nomor WhatsApp..."
+                    className="w-full pl-9 pr-8 py-2 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Status Pills */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+                  {(['Semua', 'Belum mulai', 'Sedang memilih', 'Selesai dipilih'] as const).map(
+                    (st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setFilterStatus(st)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                          filterStatus === st
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+
+              {/* Sub-bar Filter Waktu & Hapus Semua (Khusus Tab Selesai Dipilih) */}
+              {filterStatus === 'Selesai dipilih' && (
+                <div className="p-3 sm:px-4 sm:py-3 rounded-xl border bg-slate-900/90 border-slate-700/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 animate-in fade-in">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-blue-400" />
+                      Rentang Waktu:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setFinishedTimeFilter('all')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                        finishedTimeFilter === 'all'
+                          ? 'bg-blue-600 text-white shadow-xs font-bold'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+                      }`}
+                    >
+                      Semua Waktu ({finishedCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFinishedTimeFilter('older_1_month')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 ${
+                        finishedTimeFilter === 'older_1_month'
+                          ? 'bg-amber-600 text-white shadow-xs font-bold'
+                          : 'bg-slate-800 text-amber-300 hover:bg-slate-700 hover:text-amber-200'
+                      }`}
+                    >
+                      <span>&gt; 1 Bulan ({olderThanOneMonthFinishedCount})</span>
+                    </button>
+                  </div>
+
+                  {/* Tombol Delete All jika filter > 1 bulan dipilih */}
+                  {finishedTimeFilter === 'older_1_month' && (
+                    <button
+                      type="button"
+                      onClick={() => setIsDeleteOlderModalOpen(true)}
+                      disabled={olderThanOneMonthFinishedCount === 0}
+                      className="flex items-center justify-center gap-2 px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95"
+                      title={
+                        olderThanOneMonthFinishedCount === 0
+                          ? 'Tidak ada galeri yang lebih dari 1 bulan'
+                          : `Hapus semua ${olderThanOneMonthFinishedCount} galeri yang lebih dari 1 bulan`
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Hapus Semua ({olderThanOneMonthFinishedCount})</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Gallery Cards Grid */}
+              {filteredGalleries.length === 0 ? (
+                <div className="p-12 text-center rounded-xl border bg-[#1E293B] border-slate-700">
+                  <div className="h-12 w-12 rounded-full bg-blue-950/40 text-blue-500 mx-auto flex items-center justify-center mb-3">
+                    <Search className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-white">
+                    Tidak Ada Galeri yang Cocok
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                    {searchQuery
+                      ? `Tidak ditemukan galeri dengan kata kunci "${searchQuery}". Coba kata pencarian lain.`
+                      : 'Belum ada galeri foto yang dibuat.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('')
+                      setFilterStatus('Semua')
+                      const el = document.getElementById('driveLink')
+                      el?.focus()
+                      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }}
+                    className="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                  >
+                    + Buat Galeri Baru
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                    {paginatedGalleries.map((gallery) => {
+                    const selectedCount = gallery.selectedPhotos || 0
+                    const maxP = gallery.maxPhotos || 60
+                    const progressPercent = Math.min(100, Math.round((selectedCount / maxP) * 100))
+
+                    return (
+                      <div
+                        key={gallery.id}
+                        className="rounded-xl border transition-all hover:shadow-md flex flex-col justify-between overflow-hidden bg-[#1E293B] border-slate-700/80 hover:border-slate-600 shadow-xs"
+                      >
+                        <div className="p-5 space-y-4">
+                          {/* Client Info & Cover */}
+                          <div className="flex gap-3.5 items-start">
+                            <div className="relative h-20 w-20 shrink-0 rounded-lg overflow-hidden border border-slate-700 bg-slate-900">
+                              {gallery.coverUrl ? (
+                                <img
+                                  src={gallery.coverUrl}
+                                  alt={gallery.clientName}
+                                  className="h-full w-full object-cover"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none'
+                                  }}
+                                />
+                              ) : (
+                                <div className="h-full w-full flex items-center justify-center text-slate-400 text-xs">
+                                  No Photo
+                                </div>
+                              )}
+                              <span className="absolute bottom-0 inset-x-0 bg-black/70 text-white text-[9px] text-center font-medium py-0.5 backdrop-blur-xs">
+                                {gallery.photos?.length || 0} FOTO
+                              </span>
+                            </div>
+
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-bold text-base text-white truncate">
+                                {gallery.clientName}
+                              </h4>
+                              <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
+                                <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                <span>{gallery.date || 'Tanpa Tanggal'}</span>
+                              </p>
+                              <p className="text-xs text-slate-400 flex items-center gap-1.5 truncate mt-0.5">
+                                <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                <span>{gallery.whatsapp || '-'}</span>
+                              </p>
+
+                              {/* Status Badge & View Count */}
+                              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  className={`inline-block px-2.5 py-0.5 text-[11px] font-semibold rounded-full ${
+                                    gallery.status === 'Selesai dipilih'
+                                      ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-800'
+                                      : gallery.status === 'Sedang memilih'
+                                      ? 'bg-amber-950/40 text-amber-300 border border-amber-800'
+                                      : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                  }`}
+                                >
+                                  {gallery.status}
+                                </span>
+
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-800/90 text-slate-300 border border-slate-700"
+                                  title="Jumlah kali galeri ini telah dibuka oleh klien"
+                                >
+                                  <Eye className="h-3 w-3 text-slate-400" />
+                                  <span>Dibuka {gallery.viewCount || (gallery.isClientViewed ? 1 : 0)}x</span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Progress Meter */}
+                          <div className="p-3 rounded-lg border bg-slate-900/60 border-slate-700/60">
+                            <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 mb-1.5">
+                              <span className="font-medium">Foto Dipilih:</span>
+                              <span className="font-bold text-slate-900 dark:text-white">
+                                {selectedCount} / {maxP} ({progressPercent}%)
+                              </span>
+                            </div>
+                            <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                              <div
+                                style={{ width: `${progressPercent}%` }}
+                                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-2">
+                              <span>Tanpa batas waktu</span>
+                              <span>{gallery.allowDownload ? 'Download ON' : 'Download OFF'}</span>
+                            </div>
+                          </div>
+
+                          {/* Tombol Lihat Foto Pilihan Klien */}
+                          {selectedCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => setViewingSelectedGallery(gallery)}
+                              className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer"
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                              <span>Lihat {selectedCount} Foto Pilihan Klien</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled
+                              className="w-full py-2 px-3 rounded-lg bg-slate-800/40 border border-slate-700/60 text-slate-500 font-medium text-xs flex items-center justify-center gap-2 cursor-not-allowed"
+                            >
+                              <CheckCircle2 className="h-4 w-4 opacity-40" />
+                              <span>Belum Ada Foto Dipilih Klien</span>
+                            </button>
+                          )}
+
+                          {/* Action Buttons */}
+                          <div className="pt-1 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openShareModalForGallery(gallery)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Share2 className="h-3.5 w-3.5" />
+                              <span className="truncate">Bagikan WA</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDriveFolder(gallery)}
+                              className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Folder className="h-3.5 w-3.5" />
+                              <span className="truncate">Buka Drive</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(gallery)}
+                              className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              <span>Edit</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setGalleryToDelete(gallery)}
+                              className="border border-rose-200 dark:border-rose-900/40 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-rose-600 dark:text-rose-400 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Hapus</span>
+                            </button>
+                          </div>
+
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Pagination Controls */}
+                <div className="p-4 rounded-xl border border-slate-700/80 bg-[#1E293B] flex flex-col sm:flex-row items-center justify-between gap-4 text-xs shadow-xs">
+                  <div className="text-slate-400">
+                    Menampilkan <strong className="text-white">{startIndex + 1}</strong> -{' '}
+                    <strong className="text-white">{Math.min(endIndex, filteredGalleries.length)}</strong> dari{' '}
+                    <strong className="text-white">{filteredGalleries.length}</strong> galeri
+                    <span className="text-slate-500 ml-1.5">(9 per halaman)</span>
+                  </div>
+
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentPage((prev) => Math.max(1, prev - 1))
+                          window.scrollTo({ top: 380, behavior: 'smooth' })
+                        }}
+                        disabled={safeCurrentPage === 1}
+                        className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 cursor-pointer"
+                        title="Halaman Sebelumnya"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span className="hidden sm:inline">Sebelumnya</span>
+                      </button>
+
+                      {getPageNumbers(safeCurrentPage, totalPages).map((p, idx) =>
+                        p === '...' ? (
+                          <span key={`dots-${idx}`} className="px-1 text-slate-500">
+                            ...
+                          </span>
+                        ) : (
+                          <button
+                            key={`page-${p}`}
+                            type="button"
+                            onClick={() => {
+                              setCurrentPage(Number(p))
+                              window.scrollTo({ top: 380, behavior: 'smooth' })
+                            }}
+                            className={`h-8 w-8 rounded-lg font-bold transition-colors cursor-pointer text-xs ${
+                              safeCurrentPage === p
+                                ? 'bg-blue-600 text-white shadow-xs'
+                                : 'border border-slate-700/80 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        )
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentPage((prev) => Math.min(totalPages, prev + 1))
+                          window.scrollTo({ top: 380, behavior: 'smooth' })
+                        }}
+                        disabled={safeCurrentPage === totalPages}
+                        className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 cursor-pointer"
+                        title="Halaman Berikutnya"
+                      >
+                        <span className="hidden sm:inline">Berikutnya</span>
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            </div>
+          </div>
+        </main>
+
+      {/* =========================================================================
+          MODALS & OVERLAYS (CLEAN MODERN CMS STYLE)
+      ========================================================================= */}
 
       {/* 1. Share Ready Modal (WhatsApp Message) */}
       {isShareModalOpen && shareModalData && (
@@ -1609,7 +1917,7 @@ Selamat menikmati momennya`
       {editingGallery && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
           <div
-            className={`w-full max-w-2xl rounded-2xl border overflow-hidden shadow-2xl my-8 ${
+            className={`w-full max-w-2xl rounded-2xl border shadow-2xl my-8 ${
               isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
             }`}
           >
@@ -1659,7 +1967,7 @@ Selamat menikmati momennya`
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                     Slug URL
@@ -1669,18 +1977,6 @@ Selamat menikmati momennya`
                     value={editSlug}
                     onChange={(e) => setEditSlug(e.target.value)}
                     placeholder="contoh: wedding-sarah-kevin"
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Tanggal Acara
-                  </label>
-                  <input
-                    type="date"
-                    value={editEventDate}
-                    onChange={(e) => setEditEventDate(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                   />
                 </div>
@@ -1708,32 +2004,154 @@ Selamat menikmati momennya`
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Batas Maksimal Foto
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={editMaxPhotos}
-                    onChange={(e) => setEditMaxPhotos(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  />
-                </div>
+              <div>
+                {(() => {
+                  const editAvailablePhotosCount = (
+                    editNewScannedPhotos && editNewScannedPhotos.length > 0
+                      ? editNewScannedPhotos
+                      : editingGallery.photos
+                  )?.length || 0
+                  const isEditExceeded =
+                    editAvailablePhotosCount > 0 &&
+                    Boolean(editMaxPhotos) &&
+                    parseInt(editMaxPhotos) > editAvailablePhotosCount
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Sisa Hari Memilih
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={editRemainingDays}
-                    onChange={(e) => setEditRemainingDays(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  />
-                </div>
+                  return (
+                    <>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                        Batas Maksimal Foto Dipilih
+                      </label>
+                      <div className="relative" ref={editMaxPhotosContainerRef}>
+                        <div
+                          className={`flex items-center rounded-lg border bg-white dark:bg-slate-800 transition-all focus-within:ring-2 overflow-hidden ${
+                            isEditExceeded
+                              ? 'border-rose-500 focus-within:ring-rose-500/20 focus-within:border-rose-500'
+                              : 'border-slate-200 dark:border-slate-600 focus-within:ring-blue-500/20 focus-within:border-blue-500'
+                          }`}
+                        >
+                          <input
+                            type="number"
+                            min={1}
+                            max={editAvailablePhotosCount > 0 ? editAvailablePhotosCount : 5000}
+                            value={editMaxPhotos}
+                            onChange={(e) => setEditMaxPhotos(e.target.value)}
+                            placeholder="60"
+                            className={`flex-1 p-2.5 text-xs bg-transparent focus:outline-none ${
+                              isEditExceeded
+                                ? 'text-rose-500 font-semibold'
+                                : 'text-slate-900 dark:text-white'
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            onClick={toggleEditMaxPhotosDropdown}
+                            className="px-3 py-2.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700 border-l border-slate-200 dark:border-slate-600 transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
+                            title="Buka pilihan preset"
+                          >
+                            <span className="hidden sm:inline">Pilih</span>
+                            <ChevronDown
+                              className={`h-4 w-4 transition-transform duration-200 ${
+                                isEditMaxPhotosDropdownOpen ? 'rotate-180 text-blue-500' : ''
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        {/* Info & Warning jika melebihi atau informasi jumlah foto di Drive */}
+                        {isEditExceeded ? (
+                          <p className="text-[11px] text-rose-500 mt-1.5 flex items-center gap-1 font-medium leading-tight">
+                            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                            <span>Batas foto tidak boleh melebihi foto di Drive ({editAvailablePhotosCount} foto).</span>
+                          </p>
+                        ) : editAvailablePhotosCount > 0 ? (
+                          <p className="text-[11px] text-blue-500 dark:text-blue-400 mt-1.5 font-medium leading-tight">
+                            Tersedia: {editAvailablePhotosCount} foto
+                          </p>
+                        ) : null}
+
+                        {/* Dropdown Menu Responsif */}
+                        {isEditMaxPhotosDropdownOpen && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-20"
+                              onClick={() => setIsEditMaxPhotosDropdownOpen(false)}
+                            />
+                            <div
+                              className={`absolute right-0 ${
+                                editDropdownPlacement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+                              } z-30 w-full sm:w-[260px] max-w-[calc(100vw-2.5rem)] max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1E293B] shadow-2xl p-1.5 animate-in fade-in zoom-in-95`}
+                            >
+                              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1 flex items-center justify-between">
+                                <span>Pilih Preset Cepat:</span>
+                                {editAvailablePhotosCount > 0 && (
+                                  <span className="text-blue-500 lowercase font-medium">({editAvailablePhotosCount} di drive)</span>
+                                )}
+                              </div>
+
+                              {/* Opsi preset semua foto yang ada di Drive - Tampil di atas agar langsung terlihat */}
+                              {editAvailablePhotosCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditMaxPhotos(String(editAvailablePhotosCount))
+                                    setIsEditMaxPhotosDropdownOpen(false)
+                                  }}
+                                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between mb-1 transition-colors cursor-pointer ${
+                                    editMaxPhotos === String(editAvailablePhotosCount)
+                                      ? 'bg-blue-600 text-white'
+                                      : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30'
+                                  }`}
+                                >
+                                  <span>Semua Foto ({editAvailablePhotosCount} Foto)</span>
+                                  {editMaxPhotos === String(editAvailablePhotosCount) && (
+                                    <Check className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              )}
+
+                              {[
+                                { val: '10', label: '10 Foto' },
+                                { val: '30', label: '30 Foto' },
+                                { val: '50', label: '50 Foto' },
+                                { val: '60', label: '60 Foto' },
+                              ].map((item) => {
+                                const isPresExceeded =
+                                  editAvailablePhotosCount > 0 &&
+                                  parseInt(item.val) > editAvailablePhotosCount
+                                return (
+                                  <button
+                                    key={item.val}
+                                    type="button"
+                                    disabled={isPresExceeded}
+                                    onClick={() => {
+                                      if (isPresExceeded) return
+                                      setEditMaxPhotos(item.val)
+                                      setIsEditMaxPhotosDropdownOpen(false)
+                                    }}
+                                    className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
+                                      isPresExceeded
+                                        ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-slate-500'
+                                        : editMaxPhotos === item.val
+                                        ? 'bg-blue-600 text-white font-semibold cursor-pointer'
+                                        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer'
+                                    }`}
+                                  >
+                                    <span>{item.label}</span>
+                                    {isPresExceeded ? (
+                                      <span className="text-[10px] text-rose-500">(Melebihi Foto)</span>
+                                    ) : (
+                                      editMaxPhotos === item.val && <Check className="h-3.5 w-3.5" />
+                                    )}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )
+                })()}
               </div>
 
               <div>
@@ -1835,6 +2253,56 @@ Selamat menikmati momennya`
                 className="rounded-lg bg-rose-600 hover:bg-rose-700 text-white px-5 py-2 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
               >
                 Ya, Hapus Permanen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3b. Modal Konfirmasi Hapus Semua Galeri Selesai > 1 Bulan */}
+      {isDeleteOlderModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div
+            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
+              isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
+            }`}
+          >
+            <div className="h-10 w-10 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-lg mb-3">
+              <Trash2 className="h-5 w-5" />
+            </div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+              Hapus Semua Galeri Selesai (&gt; 1 Bulan)?
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
+              Anda akan menghapus permanen <strong className="text-rose-400 font-bold">{olderThanOneMonthFinishedCount} galeri</strong> berstatus &ldquo;Selesai dipilih&rdquo; yang berumur lebih dari 1 bulan. Seluruh foto pilihan dan konfigurasi album ini akan dihapus secara permanen.
+            </p>
+
+            <div className="mt-6 flex justify-end gap-2.5 border-t border-slate-100 dark:border-slate-700 pt-4">
+              <button
+                type="button"
+                onClick={() => setIsDeleteOlderModalOpen(false)}
+                disabled={isDeletingOlder}
+                className="rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteOlderGalleries}
+                disabled={isDeletingOlder || olderThanOneMonthFinishedCount === 0}
+                className="rounded-lg bg-rose-600 hover:bg-rose-700 text-white px-5 py-2 text-xs font-semibold shadow-xs transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeletingOlder ? (
+                  <>
+                    <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Ya, Hapus {olderThanOneMonthFinishedCount} Galeri</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1973,6 +2441,254 @@ Selamat menikmati momennya`
               >
                 Tutup
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Modal Lihat Foto Pilihan Klien (Admin) */}
+      {viewingSelectedGallery && (() => {
+        const selectedPhotos = (viewingSelectedGallery.photos || []).filter(
+          (p) => p && (viewingSelectedGallery.selectedPhotoIds || []).includes(p.id)
+        )
+
+        return (
+          <div
+            className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
+            onClick={() => setViewingSelectedGallery(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-6xl h-[85vh] rounded-2xl border border-slate-700/80 bg-[#1E293B] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
+            >
+              {/* Modal Header */}
+              <div className="border-b border-slate-700/80 px-6 py-4 flex items-center justify-between shrink-0 bg-[#181D2D]">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-400 flex items-center justify-center font-bold">
+                    <CheckCircle2 className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2.5">
+                      <h3 className="text-base font-bold text-white">
+                        Foto Pilihan Klien — {viewingSelectedGallery.clientName}
+                      </h3>
+                      <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                        {viewingSelectedGallery.selectedPhotos || 0} Terpilih
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span>Total Koleksi: <strong className="text-slate-200">{viewingSelectedGallery.photos?.length || 0}</strong> foto</span>
+                      <span>•</span>
+                      <span>Batas Maks: {viewingSelectedGallery.maxPhotos} foto</span>
+                      <span>•</span>
+                      <span className="inline-flex items-center gap-1 text-blue-400">
+                        <Eye className="h-3 w-3" />
+                        <span>Dibuka {viewingSelectedGallery.viewCount || (viewingSelectedGallery.isClientViewed ? 1 : 0)}x</span>
+                      </span>
+                      <span>•</span>
+                      <span>Status: <strong className="text-slate-200">{viewingSelectedGallery.status}</strong></span>
+                      {viewingSelectedGallery.whatsapp && (
+                        <>
+                          <span>•</span>
+                          <span>WA: {viewingSelectedGallery.whatsapp}</span>
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setViewingSelectedGallery(null)}
+                  className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Modal Body: Split Kiri (Foto Preview) & Kanan (Daftar Foto Terpilih) */}
+              <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+                {selectedPhotos.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center p-12 text-center">
+                    <div>
+                      <div className="h-14 w-14 rounded-full bg-slate-800 text-slate-400 mx-auto flex items-center justify-center mb-3">
+                        <CheckCircle2 className="h-7 w-7 opacity-40 text-slate-500" />
+                      </div>
+                      <h4 className="text-base font-bold text-white">Belum Ada Foto Dipilih</h4>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        Klien belum menandai foto favorit di galeri ini. Tautan seleksi telah aktif dan siap digunakan.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* SISI KIRI: Grid Foto yang Telah Dipilih Klien */}
+                    <div className="flex-1 p-5 overflow-y-auto min-w-0">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+                        {selectedPhotos.map((photo, idx) => (
+                          <div
+                            key={photo.id || idx}
+                            onClick={() => setSelectedLightboxPhoto(photo)}
+                            className="group relative aspect-square rounded-xl overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer hover:border-blue-500 transition-all hover:scale-[1.02] shadow-sm"
+                          >
+                            <img
+                              src={photo.thumbnailUrl || photo.url}
+                              alt={photo.filename}
+                              loading="lazy"
+                              className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                            {/* Number badge */}
+                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-xs text-[10px] font-bold text-blue-300 border border-blue-500/40">
+                              #{idx + 1}
+                            </div>
+                            {/* Check badge */}
+                            <div className="absolute top-2 right-2 h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md">
+                              <Check className="h-3.5 w-3.5 stroke-[3]" />
+                            </div>
+                            {/* Filename footer */}
+                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2.5 pt-6">
+                              <p className="text-[11px] font-medium text-white truncate">
+                                {photo.filename}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* SISI KANAN: Daftar Foto Terpilih */}
+                    <div className="w-full lg:w-[360px] xl:w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l border-slate-700/80 bg-[#131724] p-5 flex flex-col overflow-hidden">
+                      {/* Header & Tombol Salin */}
+                      <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
+                        <span className="text-xs sm:text-sm font-semibold text-slate-200">
+                          Daftar foto terpilih ({selectedPhotos.length}):
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const text = selectedPhotos.map((p) => p.filename || `Foto-${p.id}`).join('\n')
+                            navigator.clipboard.writeText(text)
+                            showToast(`${selectedPhotos.length} nama file foto berhasil disalin!`)
+                          }}
+                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                          title="Salin semua nama file"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          <span>Salin Semua Nama File ({selectedPhotos.length})</span>
+                        </button>
+                      </div>
+
+                      {/* Box Berisi Daftar Nama File */}
+                      <div className="flex-1 min-h-[160px] rounded-xl border border-slate-700/80 bg-[#0B101E] p-3.5 flex flex-col overflow-hidden">
+                        <textarea
+                          readOnly
+                          value={selectedPhotos.map((p) => p.filename || `Foto-${p.id}`).join('\n')}
+                          className="w-full flex-1 font-mono text-xs sm:text-sm text-slate-200 bg-transparent resize-none focus:outline-none select-all leading-relaxed"
+                          placeholder="Belum ada foto yang dipilih..."
+                        />
+                      </div>
+
+                      {/* Tombol Unduh Semua Foto Terpilih sebagai ZIP */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleDownloadSelectedAsZip(selectedPhotos, viewingSelectedGallery.clientName)
+                        }
+                        disabled={isZipping || selectedPhotos.length === 0}
+                        className="mt-3.5 w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md disabled:opacity-50 cursor-pointer"
+                        title="Unduh seluruh foto terpilih ke satu file ZIP"
+                      >
+                        {isZipping ? (
+                          <>
+                            <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                            <span className="truncate">{zipProgressText || 'Memproses ZIP...'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Download className="h-4 w-4" />
+                            <span>Unduh Semua Foto Terpilih ({selectedPhotos.length}) (.ZIP)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="border-t border-slate-700/80 px-6 py-3.5 bg-[#181D2D] flex items-center justify-between text-xs text-slate-400 shrink-0">
+                <span>
+                  Ketuk foto manapun untuk melihat dalam resolusi penuh
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setViewingSelectedGallery(null)}
+                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Lightbox for Selected Photo */}
+      {selectedLightboxPhoto && (
+        <div
+          className="fixed inset-0 z-[85] flex items-center justify-center bg-black/95 backdrop-blur-md p-4 animate-in fade-in"
+          onClick={() => setSelectedLightboxPhoto(null)}
+        >
+          {/* Top Right Controls: Share, Download, Close */}
+          <div
+            className="absolute top-4 right-4 flex items-center gap-2.5 sm:gap-3 z-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => handleShareSelectedPhoto(selectedLightboxPhoto)}
+              className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
+              title="Bagikan Foto"
+            >
+              <Share2 className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleDownloadSelectedPhoto(selectedLightboxPhoto)}
+              disabled={isDownloadingPhoto}
+              className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg disabled:opacity-50"
+              title="Unduh Foto"
+            >
+              {isDownloadingPhoto ? (
+                <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" />
+              ) : (
+                <Download className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedLightboxPhoto(null)}
+              className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
+              title="Tutup"
+            >
+              <X className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+            </button>
+          </div>
+          <div
+            className="max-w-4xl max-h-[85vh] flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={selectedLightboxPhoto.url || selectedLightboxPhoto.thumbnailUrl}
+              alt={selectedLightboxPhoto.filename}
+              className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl"
+            />
+            <div className="mt-3 text-center">
+              <p className="text-sm font-semibold text-white">
+                {selectedLightboxPhoto.filename}
+              </p>
             </div>
           </div>
         </div>

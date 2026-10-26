@@ -29,10 +29,10 @@ function ProtectedAdminRoute({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#090D16] text-white">
+      <div className="min-h-screen flex items-center justify-center bg-[#09090b] text-white">
         <div className="flex flex-col items-center gap-3">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#9C7844] border-t-transparent" />
-          <p className="text-xs text-slate-400">Memverifikasi sesi Admin...</p>
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#C9A26A] border-t-transparent" />
+          <p className="text-xs text-stone-400">Memverifikasi sesi Admin...</p>
         </div>
       </div>
     )

@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, type FormEvent } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Eye,
   EyeOff,
@@ -7,8 +7,11 @@ import {
   Mail,
   ArrowRight,
   AlertCircle,
+  Check,
+  X,
 } from 'lucide-react'
-import { signInAdmin, isFirebaseConfigured } from '../lib/firebase.ts'
+import { signInAdmin, onAdminAuthStateChanged } from '../lib/firebase.ts'
+import liveLogo from '../assets/Live.jpg'
 
 const MAX_ATTEMPTS = 5
 const LOCKOUT_MS = 60_000
@@ -33,12 +36,45 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [rememberMe, setRememberMe] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({})
+  const location = useLocation()
   const [attempts, setAttempts] = useState(0)
   const [lockedUntil, setLockedUntil] = useState(0)
+  const [logoutSuccessToast, setLogoutSuccessToast] = useState(false)
+
+  useEffect(() => {
+    document.title = 'Live.IN | Login'
+    localStorage.removeItem('livein_demo_admin_session')
+
+    // Jika sudah memiliki sesi autentikasi Firebase yang sah, langsung ke Dashboard
+    const unsubscribe = onAdminAuthStateChanged((user) => {
+      if (user) {
+        navigate('/dashboard', { replace: true })
+      }
+    })
+
+    const hasSessionFlag = sessionStorage.getItem('logout_success_toast') === '1'
+    const hasStateFlag = Boolean((location.state as any)?.logoutSuccess)
+
+    if (hasSessionFlag || hasStateFlag) {
+      sessionStorage.removeItem('logout_success_toast')
+      if (hasStateFlag) {
+        navigate(location.pathname, { replace: true, state: {} })
+      }
+      setLogoutSuccessToast(true)
+      const timer = setTimeout(() => {
+        setLogoutSuccessToast(false)
+      }, 4000)
+      return () => {
+        clearTimeout(timer)
+        unsubscribe()
+      }
+    }
+
+    return () => unsubscribe()
+  }, [location.state, location.pathname, navigate])
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -82,7 +118,8 @@ export default function Login() {
 
       setAttempts(0)
       setIsLoading(false)
-      navigate('/dashboard')
+      sessionStorage.setItem('login_success_toast', '1')
+      navigate('/dashboard', { state: { loginSuccess: true } })
     } catch (err: any) {
       setErrorMessage(err?.message || 'Terjadi kesalahan saat masuk.')
       setIsLoading(false)
@@ -90,17 +127,38 @@ export default function Login() {
   }
 
   return (
-    <div className="relative min-h-screen w-full flex flex-col items-center justify-center bg-[#090D16] px-4 py-12 text-slate-100 overflow-hidden selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="relative min-h-screen w-full flex flex-col items-center justify-center bg-[#09090b] px-4 py-12 text-stone-100 overflow-hidden selection:bg-[#C9A26A]/30 selection:text-[#C9A26A]">
+      {/* Notifikasi Berhasil Logout (Sisi Kanan Atas - Style Default Tailwind) */}
+      {logoutSuccessToast && (
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-3 w-full max-w-sm p-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="inline-flex items-center justify-center shrink-0 w-8 h-8 text-green-500 bg-green-100 rounded-lg dark:bg-green-900/40 dark:text-green-300">
+            <Check className="w-5 h-5" />
+          </div>
+          <div className="flex-1 text-sm">
+            <p className="font-semibold text-gray-900 dark:text-white">Berhasil Keluar</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Anda telah berhasil logout dari akun admin.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLogoutSuccessToast(false)}
+            className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+            aria-label="Tutup notifikasi"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Atmospheric background glow accents */}
-      <div className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[700px] h-[380px] bg-gradient-to-b from-indigo-500/20 via-indigo-600/8 to-transparent blur-3xl rounded-full" />
-      <div className="pointer-events-none absolute bottom-0 right-1/4 w-[400px] h-[250px] bg-blue-600/5 blur-3xl rounded-full" />
+      <div className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[700px] h-[380px] bg-gradient-to-b from-[#C9A26A]/15 via-[#C9A26A]/5 to-transparent blur-3xl rounded-full" />
+      <div className="pointer-events-none absolute bottom-0 right-1/4 w-[400px] h-[250px] bg-[#C9A26A]/5 blur-3xl rounded-full" />
 
       {/* Grid Pattern Background Overlay */}
       <div
         className="pointer-events-none absolute inset-0 z-0"
         style={{
-          backgroundImage: `linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-             linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(to right, rgba(201, 162, 106, 0.035) 1px, transparent 1px),
+             linear-gradient(to bottom, rgba(201, 162, 106, 0.035) 1px, transparent 1px)`,
           backgroundSize: '40px 40px',
           maskImage:
             'radial-gradient(ellipse 85% 65% at 50% 30%, black 40%, transparent 95%)',
@@ -110,19 +168,19 @@ export default function Login() {
       />
 
       {/* Main Login Card */}
-      <div className="relative w-full max-w-[420px] rounded-3xl border border-slate-800/80 bg-slate-900/40 p-8 sm:p-10 shadow-2xl shadow-black/60 backdrop-blur-2xl transition-all">
-        {/* Logo / Brand Image Placeholder */}
-        <div className="flex justify-center mb-6">
-          <img
-            src="/logo.png"
-            alt="Logo"
-            className="h-14 w-auto max-w-[200px] object-contain"
-            onError={(e) => {
-              e.currentTarget.onerror = null
-              e.currentTarget.src =
-                'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="180" height="52" viewBox="0 0 180 52" fill="none"><rect width="180" height="52" rx="12" fill="%230b0f19" stroke="%23334155" stroke-dasharray="5 5"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="%2364748b" font-size="12" font-weight="500" font-family="sans-serif">Placeholder Logo</text></svg>'
-            }}
-          />
+      <div className="relative w-full max-w-[420px] rounded-3xl border border-stone-800 bg-[#141312] p-8 sm:p-10 shadow-2xl shadow-black/80 backdrop-blur-2xl transition-all">
+        {/* Branding Livesostory Admin Studio with Logo */}
+        <div className="flex flex-col items-center justify-center text-center mb-6">
+          <div className="h-16 w-16 rounded-2xl overflow-hidden shadow-lg shadow-black/70 border border-stone-800 p-0.5 bg-black flex items-center justify-center mb-3 hover:border-[#C9A26A]/40 transition-colors">
+            <img
+              src={liveLogo}
+              alt="Logo LiveSOStory"
+              className="h-full w-full object-contain rounded-xl"
+            />
+          </div>
+          <h1 className="font-extrabold text-xl tracking-wider text-white">
+            LIVESOSTORY.CO
+          </h1>
         </div>
 
         {/* Form */}
@@ -134,24 +192,17 @@ export default function Login() {
             </div>
           )}
 
-          {!isFirebaseConfigured && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] text-amber-300/90 flex items-start gap-2">
-              <span className="shrink-0 font-bold text-amber-400">INFO:</span>
-              <span>
-                Firebase belum terhubung di .env. Anda dapat mencoba login demo admin: <strong className="text-amber-200">admin@livein.com</strong> (password bebas min. 6 karakter).
-              </span>
-            </div>
-          )}
+
           {/* Email input */}
           <div className="space-y-1.5">
             <label
               htmlFor="email"
-              className="block text-xs font-medium text-slate-300"
+              className="block text-xs font-medium text-stone-300"
             >
               Email
             </label>
             <div className="relative">
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-500">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-stone-500">
                 <Mail className="h-4 w-4" />
               </div>
               <input
@@ -161,7 +212,7 @@ export default function Login() {
                 value={email}
                 onChange={(e) => { setEmail(e.target.value); setFieldErrors(p => ({ ...p, email: undefined })) }}
                 placeholder="nama@email.com"
-                className={`w-full rounded-xl border ${fieldErrors.email ? 'border-rose-500/60' : 'border-slate-800'} bg-slate-950/60 py-3 pl-10 pr-4 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700`}
+                className={`w-full rounded-xl border ${fieldErrors.email ? 'border-rose-500/60' : 'border-stone-800'} bg-[#0e0d0c] py-3 pl-10 pr-4 text-sm text-stone-100 placeholder-stone-600 transition-all focus:border-[#C9A26A] focus:bg-[#0e0d0c] focus:outline-none focus:ring-4 focus:ring-[#C9A26A]/15 hover:border-stone-700 [&:-webkit-autofill]:bg-[#0e0d0c] [&:-webkit-autofill]:[-webkit-text-fill-color:#f5f5f4] [&:-webkit-autofill]:[box-shadow:0_0_0_1000px_#0e0d0c_inset]`}
               />
             </div>
             {fieldErrors.email && (
@@ -171,22 +222,14 @@ export default function Login() {
 
           {/* Password input */}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label
-                htmlFor="password"
-                className="block text-xs font-medium text-slate-300"
-              >
-                Kata Sandi
-              </label>
-              <a
-                href="#forgot"
-                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-              >
-                Lupa sandi?
-              </a>
-            </div>
+            <label
+              htmlFor="password"
+              className="block text-xs font-medium text-stone-300"
+            >
+              Kata Sandi
+            </label>
             <div className="relative">
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-500">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-stone-500">
                 <Lock className="h-4 w-4" />
               </div>
               <input
@@ -196,14 +239,14 @@ export default function Login() {
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setFieldErrors(p => ({ ...p, password: undefined })) }}
                 placeholder="••••••••"
-                className={`w-full rounded-xl border ${fieldErrors.password ? 'border-rose-500/60' : 'border-slate-800'} bg-slate-950/60 py-3 pl-10 pr-11 text-sm text-slate-100 placeholder-slate-500 transition-all focus:border-indigo-500/80 focus:bg-slate-950/90 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 hover:border-slate-700`}
+                className={`w-full rounded-xl border ${fieldErrors.password ? 'border-rose-500/60' : 'border-stone-800'} bg-[#0e0d0c] py-3 pl-10 pr-11 text-sm text-stone-100 placeholder-stone-600 transition-all focus:border-[#C9A26A] focus:bg-[#0e0d0c] focus:outline-none focus:ring-4 focus:ring-[#C9A26A]/15 hover:border-stone-700 [&:-webkit-autofill]:bg-[#0e0d0c] [&:-webkit-autofill]:[-webkit-text-fill-color:#f5f5f4] [&:-webkit-autofill]:[box-shadow:0_0_0_1000px_#0e0d0c_inset]`}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 tabIndex={-1}
                 aria-label={showPassword ? 'Sembunyikan sandi' : 'Tampilkan sandi'}
-                className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-slate-500 hover:text-slate-300 transition-colors"
+                className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-stone-500 hover:text-stone-300 transition-colors cursor-pointer"
               >
                 {showPassword ? (
                   <EyeOff className="h-4 w-4" />
@@ -217,29 +260,15 @@ export default function Login() {
             )}
           </div>
 
-          {/* Remember me */}
-          <div className="flex items-center pt-0.5">
-            <label className="flex items-center gap-2.5 cursor-pointer select-none group">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="h-4 w-4 rounded-md border-slate-700 bg-slate-950/80 text-indigo-600 focus:ring-indigo-500/30 cursor-pointer transition-colors"
-              />
-              <span className="text-xs text-slate-400 group-hover:text-slate-300 transition-colors">
-                Ingat saya di perangkat ini
-              </span>
-            </label>
-          </div>
 
           {/* Submit button */}
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 py-3 px-4 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition-all hover:from-indigo-500 hover:to-indigo-400 hover:shadow-indigo-500/35 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+            className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-[#C9A26A] hover:bg-[#ba965c] py-3 px-4 text-sm font-bold text-stone-950 shadow-lg shadow-[#C9A26A]/20 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
           >
             {isLoading ? (
-              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-stone-950/30 border-t-stone-950" />
             ) : (
               <>
                 <span>Masuk Sekarang</span>
@@ -251,9 +280,10 @@ export default function Login() {
       </div>
 
       {/* Footer copyright */}
-      <div className="mt-8 text-center text-xs text-slate-500">
-        &copy; {new Date().getFullYear()} LIVEin. Hak cipta dilindungi.
+      <div className="mt-8 text-center text-xs text-stone-600">
+        &copy; {new Date().getFullYear()} Live.IN. Hak cipta dilindungi.
       </div>
     </div>
   )
 }
+

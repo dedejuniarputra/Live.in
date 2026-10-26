@@ -94,23 +94,32 @@ export function normalizeGalleryItem(item: any): GalleryData {
       return cat === expected
     })
 
-  const photos: GalleryPhoto[] = rawPhotos.map((p: any, i: number) => ({
-    id: p?.id ? String(p.id) : `photo-${i}`,
-    fileId: p?.fileId ? String(p.fileId) : p?.id ? String(p.id) : `file-${i}`,
-    filename: p?.filename ? String(p.filename) : `FOTO_${String(i + 1).padStart(4, '0')}.JPG`,
-    url: p?.url ? String(p.url) : '',
-    thumbnailUrl: p?.thumbnailUrl ? String(p.thumbnailUrl) : p?.url ? String(p.url) : '',
-    mimeType: p?.mimeType,
-    size: typeof p?.size === 'number' ? p.size : undefined,
-    aspect: p?.aspect === 'landscape' ? 'landscape' : 'portrait',
-    category:
-      isArtificialModulo
-        ? undefined
-        : p?.category && typeof p.category === 'string' && p.category.trim()
-        ? p.category.trim()
-        : undefined,
-    isHighlight: Boolean(p?.isHighlight),
-  }))
+  const selectedIds: string[] = Array.isArray(item.selectedPhotoIds)
+    ? item.selectedPhotoIds.map(String)
+    : []
+
+  const photos: GalleryPhoto[] = rawPhotos.map((p: any, i: number) => {
+    const pId = p?.id ? String(p.id) : `photo-${i}`
+    const isSelected = selectedIds.includes(pId)
+    return {
+      id: pId,
+      fileId: p?.fileId ? String(p.fileId) : p?.id ? String(p.id) : `file-${i}`,
+      filename: p?.filename ? String(p.filename) : `FOTO_${String(i + 1).padStart(4, '0')}.JPG`,
+      url: p?.url ? String(p.url) : '',
+      thumbnailUrl: p?.thumbnailUrl ? String(p.thumbnailUrl) : p?.url ? String(p.url) : '',
+      mimeType: p?.mimeType,
+      size: typeof p?.size === 'number' ? p.size : undefined,
+      aspect: p?.aspect === 'landscape' ? 'landscape' : 'portrait',
+      category:
+        isArtificialModulo
+          ? undefined
+          : p?.category && typeof p.category === 'string' && p.category.trim()
+          ? p.category.trim()
+          : undefined,
+      // Highlight is exclusively derived from client selection (selectedPhotoIds)
+      isHighlight: isSelected,
+    }
+  })
 
   const rawClientName = (item.clientName || 'Klien Baru').toString().trim()
   const rawSlug = (item.slug || rawClientName)
@@ -436,28 +445,46 @@ export function findGalleryBySlug(slug: string): GalleryData | null {
 }
 
 export function togglePhotoSelection(
-  gallerySlug: string,
+  gallerySlugOrId: string,
   photoId: string
 ): { updatedGallery: GalleryData | null; isSelected: boolean } {
   const galleries = getStoredGalleries()
-  const gallery = findGalleryBySlug(gallerySlug)
+  const clean = (s?: string) => (s ? String(s).toLowerCase().replace(/-3$/, '').trim() : '')
+  const target = clean(gallerySlugOrId)
+
+  const gallery =
+    findGalleryBySlug(gallerySlugOrId) ||
+    galleries.find(
+      (g) => clean(g.id) === target || clean(g.slug) === target || clean(g.clientName) === target
+    ) ||
+    null
+
   if (!gallery) return { updatedGallery: null, isSelected: false }
 
-  const currentIds = Array.isArray(gallery.selectedPhotoIds) ? gallery.selectedPhotoIds : []
-  const isAlreadySelected = currentIds.includes(photoId)
+  const pId = String(photoId)
+  const currentIds = Array.isArray(gallery.selectedPhotoIds)
+    ? gallery.selectedPhotoIds.map(String)
+    : []
+  const isAlreadySelected = currentIds.includes(pId)
   let newSelectedIds: string[] = []
 
   if (isAlreadySelected) {
-    newSelectedIds = currentIds.filter((id) => id !== photoId)
+    newSelectedIds = currentIds.filter((id) => id !== pId)
   } else {
     if (currentIds.length >= gallery.maxPhotos) {
       return { updatedGallery: gallery, isSelected: false }
     }
-    newSelectedIds = [...currentIds, photoId]
+    newSelectedIds = [...currentIds, pId]
   }
+
+  const updatedPhotos = (gallery.photos || []).map((p) => ({
+    ...p,
+    isHighlight: newSelectedIds.includes(String(p.id)),
+  }))
 
   const updatedGallery: GalleryData = {
     ...gallery,
+    photos: updatedPhotos,
     selectedPhotoIds: newSelectedIds,
     selectedPhotos: newSelectedIds.length,
     status:
@@ -468,22 +495,7 @@ export function togglePhotoSelection(
         : 'Sedang memilih',
   }
 
-  const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
-  const idx = galleries.findIndex(
-    (g) => clean(g.id) === clean(gallery.id) || clean(g.slug) === clean(gallery.slug)
-  )
-  if (idx >= 0) {
-    galleries[idx] = updatedGallery
-    saveStoredGalleries(galleries)
-  }
-
-  if (isFirebaseConfigured && gallery.id) {
-    updateDoc(doc(db, 'galleries', gallery.id), {
-      selectedPhotoIds: newSelectedIds,
-      selectedPhotos: newSelectedIds.length,
-      status: updatedGallery.status,
-    }).catch((err) => console.warn('Firestore updateDoc photo selection error:', err))
-  }
+  saveOrUpdateGallery(updatedGallery)
 
   return { updatedGallery, isSelected: !isAlreadySelected }
 }

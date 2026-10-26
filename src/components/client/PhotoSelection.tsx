@@ -1,30 +1,25 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, Link, useLocation } from 'react-router-dom'
 import {
   LayoutGrid,
   Check,
-  Search,
-  SlidersHorizontal,
-  Moon,
-  Sun,
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Send,
   Sparkles,
-  CheckCircle2,
   ChevronsLeftRight,
   Share2,
   Download,
-  Grid2X2,
-  Grid3X3,
   Columns2,
-  Eye,
+  ArrowUp,
+  Search,
+  ListFilter,
 } from 'lucide-react'
 import {
   findGalleryBySlug,
   fetchGalleryBySlug,
-  togglePhotoSelection,
   saveOrUpdateGallery,
   getStoredGalleries,
   incrementGalleryViewCount,
@@ -55,41 +50,61 @@ export default function PhotoSelection() {
     }
   })
 
-  // Primary filter: 'semua' | 'terpilih'
-  const [mainTab, setMainTab] = useState<'semua' | 'terpilih'>('semua')
+  // Primary filter: 'semua' | 'highlight' | 'terpilih'
+  const [mainTab, setMainTab] = useState<'semua' | 'highlight' | 'terpilih'>('semua')
   // Secondary category filter: 'semua' | string
   const [subCategory, setSubCategory] = useState<string>('semua')
 
-  // Grid Density Size: 'normal' | 'large'
-  const [gridSize, setGridSize] = useState<'normal' | 'large'>('normal')
+  // Sorting
+  const [isSortAsc, setIsSortAsc] = useState(true)
 
-  // Search & Lightbox
-  const [searchQuery, setSearchQuery] = useState('')
-  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  // Lightbox & Selection
   const [activePhoto, setActivePhoto] = useState<GalleryPhoto | null>(null)
   const [activePhotoIndex, setActivePhotoIndex] = useState<number>(0)
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false)
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false)
   const [isCopied, setIsCopied] = useState(false)
   const [loadedPhotos, setLoadedPhotos] = useState<Record<string, boolean>>({})
+  const [photoRatios, setPhotoRatios] = useState<Record<string, number>>({})
+
+  const [columnCount, setColumnCount] = useState(() => {
+    if (typeof window === 'undefined') return 6
+    const w = window.innerWidth
+    if (w < 640) return 2
+    if (w < 768) return 3
+    if (w < 1024) return 4
+    if (w < 1280) return 5
+    if (w < 1536) return 6
+    return 7
+  })
+
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth
+      const nextCols =
+        w < 640 ? 2 : w < 768 ? 3 : w < 1024 ? 4 : w < 1280 ? 5 : w < 1536 ? 6 : 7
+      setColumnCount((prev) => (prev === nextCols ? prev : nextCols))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [touchStartX, setTouchStartX] = useState<number | null>(null)
   const [touchEndX, setTouchEndX] = useState<number | null>(null)
+  const [showScrollTop, setShowScrollTop] = useState(false)
 
-  // Theme toggle: Default Dark Mode matching AlbumShare and LIVEin luxury theme (#090D16)
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('client-gallery-theme')
-    return saved !== 'light'
-  })
+  // Scroll to top button visibility listener
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollTop(window.scrollY > 350)
+    }
+    window.addEventListener('scroll', handleScroll, { passive: true })
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
 
-  const toggleTheme = () => {
-    setIsDarkMode((prev) => {
-      const next = !prev
-      localStorage.setItem('client-gallery-theme', next ? 'dark' : 'light')
-      return next
-    })
-  }
+  // Client gallery is permanently styled in modern dark mode (#0c0d0e)
+  const isDarkMode = true
 
   const [isLoading, setIsLoading] = useState(true)
 
@@ -120,7 +135,9 @@ export default function PhotoSelection() {
         }
 
         if (data?.clientName) {
-          document.title = `${data.clientName} — Pilih Foto Favorit`
+          document.title = `Live.IN | Seleksi Foto - ${data.clientName}`
+        } else {
+          document.title = 'Live.IN | Seleksi Foto'
         }
         setIsLoading(false)
       }
@@ -169,7 +186,12 @@ export default function PhotoSelection() {
   const selectedCount = selectedPhotoIds.length
   const maxPhotos = gallery?.maxPhotos || 60
 
-  // Extract unique available categories dynamically
+  // Highlights are exclusively the photos chosen by the client
+  const highlightPhotos = photos.filter(
+    (p) => p && selectedPhotoIds.includes(p.id)
+  )
+
+  // Extract unique available categories (subfolders) dynamically
   const availableCategories = Array.from(
     new Set(
       photos
@@ -178,41 +200,95 @@ export default function PhotoSelection() {
     )
   )
   const totalCount = photos.length
+  const mainFolderName = (gallery?.clientName || 'Folder').trim()
+  const displayFolders = availableCategories.length > 0 ? availableCategories : [mainFolderName]
 
   // Filtering photos
-  const filteredPhotos = photos.filter((p) => {
-    if (!p) return false
-    const filename = p.filename || ''
+  const filteredPhotos = photos
+    .filter((p) => {
+      if (!p) return false
 
-    // Search query
-    if (searchQuery.trim() && !filename.toLowerCase().includes(searchQuery.toLowerCase())) {
-      return false
-    }
+      // Main tab filter
+      if (mainTab === 'terpilih' && !selectedPhotoIds.includes(p.id)) return false
+      if (mainTab === 'highlight' && !selectedPhotoIds.includes(p.id)) return false
 
-    // Main tab filter
-    if (mainTab === 'terpilih' && !selectedPhotoIds.includes(p.id)) return false
+      // Folder / category filter (Menyesuaikan dengan nama folder Google Drive)
+      if (subCategory !== 'semua') {
+        if (availableCategories.length > 0) {
+          if ((p.category || '').trim() !== subCategory) return false
+        } else {
+          if (subCategory !== mainFolderName) return false
+        }
+      }
 
-    // Subcategory filter (only if multiple categories actually exist)
-    if (availableCategories.length > 1 && subCategory !== 'semua') {
-      if ((p.category || '').trim() !== subCategory) return false
-    }
 
-    return true
-  })
+      return true
+    })
+    .sort((a, b) => {
+      const nameA = a.filename || ''
+      const nameB = b.filename || ''
+      return isSortAsc ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA)
+    })
+
+  const selectionColumns = useMemo(() => {
+    const cols: { photo: GalleryPhoto; originalIndex: number }[][] = Array.from(
+      { length: columnCount },
+      () => []
+    )
+    filteredPhotos.forEach((photo, idx) => {
+      if (photo) {
+        cols[idx % columnCount].push({ photo, originalIndex: idx })
+      }
+    })
+    return cols
+  }, [filteredPhotos, columnCount])
 
   const handleToggle = (photo: GalleryPhoto, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
     if (!photo || !photo.id || !gallery) return
-    const { updatedGallery, isSelected } = togglePhotoSelection(gallery.slug, photo.id)
-    if (updatedGallery) {
-      setGallery(updatedGallery)
-      if (isSelected) {
-        showToast(`Foto ${photo.filename || 'Foto'} dipilih (${updatedGallery.selectedPhotoIds.length}/${maxPhotos})`)
-      } else {
-        showToast(`Foto ${photo.filename || 'Foto'} batal dipilih`)
-      }
-    } else if (selectedCount >= maxPhotos) {
+
+    const photoId = String(photo.id)
+    const currentIds = Array.isArray(gallery.selectedPhotoIds)
+      ? gallery.selectedPhotoIds.map(String)
+      : []
+    const isAlreadySelected = currentIds.includes(photoId)
+
+    if (!isAlreadySelected && currentIds.length >= maxPhotos) {
       showToast(`Maksimal ${maxPhotos} foto sudah tercapai! Batalkan foto lain terlebih dahulu.`)
+      return
+    }
+
+    const newSelectedIds = isAlreadySelected
+      ? currentIds.filter((id) => id !== photoId)
+      : [...currentIds, photoId]
+
+    const updatedPhotos = (gallery.photos || []).map((p) => ({
+      ...p,
+      isHighlight: newSelectedIds.includes(String(p.id)),
+    }))
+
+    const newStatus: 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih' =
+      newSelectedIds.length === 0
+        ? 'Belum mulai'
+        : newSelectedIds.length >= maxPhotos
+        ? 'Selesai dipilih'
+        : 'Sedang memilih'
+
+    const updatedGallery: GalleryData = {
+      ...gallery,
+      photos: updatedPhotos,
+      selectedPhotoIds: newSelectedIds,
+      selectedPhotos: newSelectedIds.length,
+      status: newStatus,
+    }
+
+    setGallery(updatedGallery)
+    saveOrUpdateGallery(updatedGallery)
+
+    if (!isAlreadySelected) {
+      showToast(`Foto ${photo.filename || 'Foto'} dipilih (${newSelectedIds.length}/${maxPhotos})`)
+    } else {
+      showToast(`Foto ${photo.filename || 'Foto'} batal dipilih`)
     }
   }
 
@@ -254,7 +330,7 @@ export default function PhotoSelection() {
 
     const clientName = (gallery.clientName || '').trim() || 'Wisuda Putra 22 Agustus 2026'
 
-    const fullMsg = `Hallo kak LIVESOSTORY.CO, berikut daftar foto yang saya pilih dari folder ${clientName}:
+    const fullMsg = `Hallo kak Livesostory, berikut daftar foto yang sudah saya pilih dari folder ${clientName}:
 
 ${filenamesText}
 
@@ -287,15 +363,15 @@ Terima kasih kak :)`
 
     const clientName = (gallery.clientName || '').trim() || 'Wisuda Putra 22 Agustus 2026'
 
-    const waMsg = `Hallo kak LIVESOSTORY.CO, berikut daftar foto yang saya pilih dari folder ${clientName}:
+    const waMsg = `Hallo kak Livesostory, berikut daftar foto yang sudah saya pilih dari folder ${clientName}:
 
 ${filenamesText}
 
 Terima kasih kak :)`
 
-    const rawPhone = import.meta.env.VITE_ADMIN_WHATSAPP || gallery.whatsapp || '628123456789'
+    const rawPhone = import.meta.env.VITE_ADMIN_WHATSAPP || '6289601350794'
     const cleanPhone = String(rawPhone).replace(/\D/g, '')
-    const targetPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone || '628123456789'
+    const targetPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone || '6289601350794'
     window.open(
       `https://api.whatsapp.com/send?phone=${targetPhone}&text=${encodeURIComponent(waMsg)}`,
       '_blank'
@@ -465,8 +541,10 @@ Terima kasih kak :)`
 
   return (
     <div
-      className={`min-h-screen transition-colors duration-200 pb-28 ${
-        isDarkMode ? 'bg-[#090D16] text-slate-100 selection:bg-[#9C7844] selection:text-white' : 'bg-[#FAF8F5] text-stone-900'
+      className={`min-h-screen flex flex-col transition-colors duration-200 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] sm:pb-20 ${
+        isDarkMode
+          ? 'bg-[#0c0d0e] text-slate-100 selection:bg-[#ba965c] selection:text-white'
+          : 'bg-[#FAF8F5] text-stone-900 selection:bg-[#ba965c] selection:text-white'
       }`}
     >
       {/* Toast Notification */}
@@ -477,116 +555,105 @@ Terima kasih kak :)`
         </div>
       )}
 
-      {/* Top Header Section */}
+      {/* Top Header Section (Contoh Gambar 1 & 2) */}
       <header
         className={`sticky top-0 z-40 border-b backdrop-blur-md transition-colors ${
           isDarkMode
-            ? 'border-slate-800/80 bg-[#090D16]/90'
-            : 'border-stone-200/80 bg-[#FAF8F5]/90'
+            ? 'border-white/10 bg-[#0c0d0e]/95'
+            : 'border-stone-200 bg-[#FAF8F5]/95'
         }`}
       >
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 pt-4 pb-3">
-          <div className="flex items-center justify-between">
-            {/* Left: Branding & Client Title */}
-            <div>
-              <span className="block text-[10px] sm:text-[11px] font-bold tracking-[0.2em] text-[#C9A26A] uppercase">
+        <div className="w-full px-2 sm:px-4 pt-3 pb-2">
+          {/* Row 1: Brand, Title, and Counter Badge */}
+          <div className="flex items-center justify-between gap-3">
+            {/* Left: Branding & Client Title (All using Segoe UI font) */}
+            <div
+              style={{
+                fontFamily: "'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif",
+              }}
+              className="min-w-0 pr-2"
+            >
+              <span className="block text-[10.5px] sm:text-[11px] font-bold tracking-[0.18em] text-[#C9A26A] uppercase">
                 LIVESOSTORY.CO
               </span>
               <h1
-                className={`mt-0.5 text-xl sm:text-2xl font-extrabold tracking-tight uppercase ${
-                  isDarkMode ? 'text-white' : 'text-stone-900'
-                }`}
+                className="mt-0.5 text-[17px] font-semibold text-white tracking-normal truncate leading-snug"
+                title={gallery.clientName}
               >
                 {gallery.clientName}
               </h1>
-              <p
-                className={`mt-0.5 text-xs flex items-center gap-2 flex-wrap ${
-                  isDarkMode ? 'text-slate-400' : 'text-stone-500'
-                }`}
-              >
-                <span>
-                  Pilih hingga{' '}
-                  <strong
-                    className={`font-semibold ${
-                      isDarkMode ? 'text-[#E8C28A]' : 'text-stone-800'
-                    }`}
-                  >
-                    {maxPhotos}
-                  </strong>{' '}
-                  foto
-                </span>
-                <span>•</span>
-                <span className="inline-flex items-center gap-1 text-[#C9A26A]">
-                  <Eye className="h-3 w-3" />
-                  <span>Dibuka {gallery.viewCount || 1}x</span>
-                </span>
+              <p className="mt-0.5 text-xs text-[#777777]">
+                Pilih hingga{' '}
+                <strong className="font-bold text-[#b8b8b8]">{maxPhotos}</strong>{' '}
+                foto
               </p>
             </div>
 
-            {/* Right: Pill Counter Badge */}
+            {/* Right: Counter Pill Badge (Contoh Gambar 1) */}
             <div
-              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs font-semibold border shadow-xs ${
-                isDarkMode
-                  ? 'border-slate-800 bg-slate-900/90 text-slate-300'
-                  : 'border-[#EBDAC3] bg-[#FAF3E8] text-stone-700'
-              }`}
+              style={{
+                fontFamily: "'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif",
+              }}
+              className="shrink-0 flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold bg-[#1a1a1c] border border-white/10 text-[#888888]"
             >
               <span className="text-[#C9A26A] font-bold">{selectedCount}</span>
-              <span className={isDarkMode ? 'text-slate-500' : 'text-stone-400'}>/</span>
+              <span className="text-[#555555]">/</span>
               <span>{maxPhotos}</span>
             </div>
           </div>
 
-          {/* Navigation Bar 1: Main Filter Tabs & Action Icons */}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5 pt-1">
-            <div className="flex flex-wrap items-center gap-2">
+          {/* Thin Gold Divider Line (Contoh Gambar 1) */}
+          <div className="w-full border-b border-[#C9A26A]/30 mt-3" />
+
+          {/* Navigation Bar 1: Main Filter Tabs & Action Icons (Contoh Gambar 1) */}
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none]">
               {/* Tab 1: Semua */}
               <button
                 type="button"
                 onClick={() => setMainTab('semua')}
                 className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
                   mainTab === 'semua'
-                    ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold shadow-md'
-                    : isDarkMode
-                    ? 'border border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
-                    : 'border border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                    ? 'bg-[#ba965c] text-white shadow-xs'
+                    : 'border border-white/15 bg-transparent text-[#9e9e9e] hover:text-white'
                 }`}
               >
                 <LayoutGrid className="h-3.5 w-3.5" />
                 <span>Semua</span>
               </button>
 
-              {/* Tab 2: Terpilih */}
+              {/* Tab 2: Highlight */}
+              <button
+                type="button"
+                onClick={() => setMainTab('highlight')}
+                className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
+                  mainTab === 'highlight'
+                    ? 'bg-[#ba965c] text-white shadow-xs'
+                    : 'border border-white/15 bg-transparent text-[#9e9e9e] hover:text-white'
+                }`}
+              >
+                <Columns2 className="h-3.5 w-3.5" />
+                <span>Highlight</span>
+                {highlightPhotos.length > 0 && (
+                  <span className="text-[10px] opacity-80">({highlightPhotos.length})</span>
+                )}
+              </button>
+
+              {/* Tab 3: Terpilih */}
               <button
                 type="button"
                 onClick={() => setMainTab('terpilih')}
                 className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-semibold transition-all cursor-pointer ${
                   mainTab === 'terpilih'
-                    ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold shadow-md'
-                    : isDarkMode
-                    ? 'border border-slate-800 bg-slate-900 text-slate-300 hover:bg-slate-800'
-                    : 'border border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
+                    ? 'bg-[#ba965c] text-white shadow-xs'
+                    : 'border border-white/15 bg-transparent text-[#9e9e9e] hover:text-white'
                 }`}
               >
                 <Check className="h-3.5 w-3.5" />
-                <span>Terpilih</span>
-                {selectedCount > 0 && (
-                  <span
-                    className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
-                      mainTab === 'terpilih'
-                        ? 'bg-slate-950 text-[#C9A26A]'
-                        : 'bg-[#C9A26A]/20 text-[#C9A26A]'
-                    }`}
-                  >
-                    {selectedCount}
-                  </span>
-                )}
+                <span>Terpilih ({selectedCount})</span>
               </button>
-            </div>
 
-            {/* Right Tools (Mode Swipe, Grid Size Toggle, Search, Filter, Moon/Sun) */}
-            <div className="flex items-center gap-2">
-              {/* Dedicated Mode Swipe Button */}
+              {/* Tab 4: Swipe */}
               <button
                 type="button"
                 onClick={() => {
@@ -596,365 +663,340 @@ Terima kasih kak :)`
                     showToast('Tidak ada foto untuk mode swipe')
                   }
                 }}
-                className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition-all cursor-pointer ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-900/90 text-[#E8C28A] hover:bg-slate-800 hover:border-[#C9A26A]/50'
-                    : 'border-stone-200 bg-white text-[#9C7844] hover:bg-stone-50'
-                }`}
+                className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold border border-white/15 bg-transparent text-[#9e9e9e] hover:text-white transition-all cursor-pointer"
                 title="Mode Swipe / Review Layar Penuh"
               >
-                <ChevronsLeftRight className="h-3.5 w-3.5 text-[#C9A26A]" />
-                <span className="hidden sm:inline">Mode Swipe</span>
+                <ChevronsLeftRight className="h-3.5 w-3.5" />
+                <span>Swipe</span>
               </button>
+            </div>
 
-              <div className={`h-4 w-px mx-0.5 ${isDarkMode ? 'bg-slate-800' : 'bg-stone-300'}`} />
-
-              {/* Grid Density Toggle */}
+            {/* Right Tools: Sort */}
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => setGridSize((prev) => (prev === 'normal' ? 'large' : 'normal'))}
-                className={`flex h-8 w-8 items-center justify-center rounded-full border transition-colors cursor-pointer ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800'
-                    : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-                title={gridSize === 'normal' ? 'Tampilan Grid Besar (Fokus Wajah)' : 'Tampilan Grid Standar'}
+                onClick={() => setIsSortAsc((prev) => !prev)}
+                className="h-7 w-7 rounded-full border border-white/15 flex items-center justify-center text-[#9e9e9e] hover:text-white transition-colors cursor-pointer"
+                title={isSortAsc ? 'Urutan: A-Z' : 'Urutan: Z-A'}
               >
-                {gridSize === 'normal' ? <Grid2X2 className="h-3.5 w-3.5" /> : <Grid3X3 className="h-3.5 w-3.5" />}
-              </button>
-
-              {/* Search Toggle */}
-              <button
-                type="button"
-                onClick={() => setIsSearchOpen((prev) => !prev)}
-                className={`flex h-8 w-8 items-center justify-center rounded-full border transition-colors cursor-pointer ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800'
-                    : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-                title="Cari foto"
-              >
-                <Search className="h-3.5 w-3.5" />
-              </button>
-
-              {/* Sort / Filter Button */}
-              <button
-                type="button"
-                onClick={() => showToast('Urutkan berdasarkan nama/waktu')}
-                className={`flex h-8 w-8 items-center justify-center rounded-full border transition-colors cursor-pointer ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800'
-                    : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-                title="Filter & Urutkan"
-              >
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-              </button>
-
-              {/* Dark / Light Mode Toggle */}
-              <button
-                type="button"
-                onClick={toggleTheme}
-                className={`flex h-8 w-8 items-center justify-center rounded-full border transition-colors cursor-pointer ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-900 text-amber-400 hover:bg-slate-800'
-                    : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-                title={isDarkMode ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'}
-              >
-                {isDarkMode ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+                <ListFilter className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
 
-          {/* Search Input Bar (when opened) */}
-          {isSearchOpen && (
-            <div className="mt-3">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Ketik kode foto (contoh: DSC_0102)..."
-                className={`w-full max-w-sm rounded-xl border px-3.5 py-1.5 text-xs focus:outline-none ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-900 text-white focus:border-[#C9A26A]'
-                    : 'border-stone-200 bg-white text-stone-800 focus:border-[#9C7844]'
-                }`}
-                autoFocus
-              />
-            </div>
-          )}
-
-          {/* Navigation Bar 2: Sub-Categories (Hanya tampil jika Drive memiliki lebih dari 1 subfolder/kategori) */}
-          {availableCategories.length > 1 && (
-            <div className="mt-3.5 flex flex-wrap items-center gap-2 animate-in fade-in">
-              <button
-                type="button"
-                onClick={() => setSubCategory('semua')}
-                className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                  subCategory === 'semua'
-                    ? isDarkMode
-                      ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
-                      : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
-                    : isDarkMode
-                    ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
-                    : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
-                }`}
-              >
-                Semua <span className="text-[11px] opacity-75">({totalCount})</span>
-              </button>
-
-              {availableCategories.map((cat) => {
-                const count = photos.filter((p) => p && (p.category || '').trim() === cat).length
-                const isActive = subCategory === cat
-                return (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => setSubCategory(cat)}
-                    className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all cursor-pointer ${
-                      isActive
-                        ? isDarkMode
-                          ? 'border border-[#C9A26A] bg-[#C9A26A]/20 text-[#E8C28A] font-semibold'
-                          : 'bg-[#F5EFE6] text-[#9C7844] border border-[#E5D7C5] font-semibold'
-                        : isDarkMode
-                        ? 'border border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200'
-                        : 'border border-stone-200/90 bg-white text-stone-600 hover:bg-stone-50'
-                    }`}
-                  >
-                    {cat} <span className="text-[11px] opacity-75">({count})</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Main Justified Photo Grid */}
-      <main className="mx-auto max-w-7xl px-4 sm:px-6 pt-5">
-        {filteredPhotos.length === 0 ? (
-          <div className="py-20 text-center">
-            <p className={`text-sm ${isDarkMode ? 'text-slate-500' : 'text-stone-500'}`}>
-              Tidak ada foto pada kategori ini.
-            </p>
-          </div>
-        ) : (
+          {/* Navigation Bar 2: Folder Category Pills (Menyesuaikan nama folder saat Google Drive discan) */}
           <div
-            className={`gap-3 sm:gap-4 ${
-              gridSize === 'large'
-                ? 'columns-1 sm:columns-2 md:columns-3 lg:columns-3 xl:columns-4'
-                : 'columns-2 sm:columns-3 md:columns-4 lg:columns-4 xl:columns-5'
-            }`}
+            style={{
+              fontFamily: "'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif",
+            }}
+            className="mt-2.5 flex items-center gap-2 overflow-x-auto [scrollbar-width:none]"
           >
-            {filteredPhotos.map((photo, index) => {
-              if (!photo) return null
-              const isSelected = selectedPhotoIds.includes(photo.id)
-              const isLandscape = photo.aspect === 'landscape'
-              const isLoaded = Boolean(loadedPhotos[photo.id])
-              const initialSrc =
-                photo.thumbnailUrl ||
-                (photo.fileId
-                  ? `https://drive.google.com/thumbnail?id=${photo.fileId}&sz=w800`
-                  : photo.url)
+            <button
+              type="button"
+              onClick={() => setSubCategory('semua')}
+              className={`rounded-full px-3 py-0.5 text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
+                subCategory === 'semua'
+                  ? 'border border-[#ba965c] bg-[#ba965c]/15 text-[#E8C28A] font-semibold'
+                  : 'border border-white/15 bg-transparent text-[#9e9e9e] hover:text-white'
+              }`}
+            >
+              Semua <span className="text-[10px] opacity-75">{totalCount}</span>
+            </button>
+
+            {displayFolders.map((folder) => {
+              const count =
+                availableCategories.length > 0
+                  ? photos.filter((p) => p && (p.category || '').trim() === folder).length
+                  : totalCount
+              const isActive = subCategory === folder
 
               return (
-                <div
-                  key={photo.id}
-                  onClick={() => openLightbox(photo, index)}
-                  className={`group relative break-inside-avoid mb-3 sm:mb-4 overflow-hidden rounded-xl cursor-pointer transition-all ${
-                    isLandscape ? 'aspect-[4/3]' : 'aspect-[3/4]'
-                  } ${
-                    isDarkMode
-                      ? 'bg-slate-900 border border-slate-800/80'
-                      : 'bg-stone-200 border border-stone-200/80'
-                  } ${
-                    isSelected
-                      ? 'ring-3 ring-[#C9A26A] shadow-xl'
-                      : 'hover:brightness-95'
+                <button
+                  key={folder}
+                  type="button"
+                  onClick={() => setSubCategory(subCategory === folder ? 'semua' : folder)}
+                  className={`rounded-full px-3 py-0.5 text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
+                    isActive
+                      ? 'border border-[#ba965c] bg-[#ba965c]/15 text-[#E8C28A] font-semibold'
+                      : 'border border-white/15 bg-transparent text-[#9e9e9e] hover:text-white'
                   }`}
                 >
-                  {/* Skeleton Placeholder (Prevents blank gaps and layout jumps) */}
-                  {!isLoaded && (
-                    <div
-                      className={`absolute inset-0 animate-pulse ${
-                        isDarkMode ? 'bg-slate-800/60' : 'bg-stone-300/60'
-                      }`}
-                    />
-                  )}
-
-                  <img
-                    src={initialSrc}
-                    alt={photo.filename}
-                    loading={index < 12 ? 'eager' : 'lazy'}
-                    decoding="async"
-                    // @ts-ignore
-                    fetchPriority={index < 6 ? 'high' : 'auto'}
-                    referrerPolicy="no-referrer"
-                    onLoad={() =>
-                      setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
-                    }
-                    onError={(e) => {
-                      setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
-                      const fileId = photo.fileId || photo.id
-                      const target = e.currentTarget
-                      if (!target.dataset.triedProxy && fileId) {
-                        target.dataset.triedProxy = 'true'
-                        target.src = `/api/drive-image?id=${fileId}&sz=800`
-                      } else if (!target.dataset.triedLh3 && fileId) {
-                        target.dataset.triedLh3 = 'true'
-                        target.src = `https://lh3.googleusercontent.com/d/${fileId}`
-                      } else if (photo.url && target.src !== photo.url) {
-                        target.src = photo.url
-                      }
-                    }}
-                    className={`h-full w-full object-cover transition-opacity duration-300 group-hover:scale-[1.02] ${
-                      isLoaded ? 'opacity-100' : 'opacity-0'
-                    }`}
-                  />
-
-                  {/* Subtle dark overlay when touched/hovered */}
-                  <div
-                    className={`absolute inset-0 bg-black/20 transition-opacity duration-200 pointer-events-none ${
-                      isSelected
-                        ? 'opacity-25'
-                        : 'opacity-0 group-hover:opacity-100 group-active:opacity-100'
-                    }`}
-                  />
-
-                  {/* Top-Right Circular Checkbox Button (Affordance always visible, faces never blocked) */}
-                  <div className="absolute top-2 right-2 z-20">
-                    <button
-                      type="button"
-                      onClick={(e) => handleToggle(photo, e)}
-                      className={`h-7 w-7 sm:h-8 sm:w-8 flex items-center justify-center rounded-full transition-all duration-200 cursor-pointer shadow-md active:scale-90 ${
-                        isSelected
-                          ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 ring-2 ring-white/70 shadow-lg scale-100'
-                          : 'border-2 border-white/75 bg-black/40 text-transparent hover:text-white/80 hover:border-white hover:bg-black/60 opacity-80 group-hover:opacity-100 hover:scale-105'
-                      }`}
-                      title={isSelected ? 'Batalkan pilihan foto' : 'Pilih foto ini'}
-                    >
-                      <Check className={`h-4 w-4 ${isSelected ? 'stroke-[3]' : 'stroke-[2.5]'}`} />
-                    </button>
-                  </div>
-
-                  {/* Photo Code & Hint Overlay on Hover */}
-                  <div className="pointer-events-none absolute bottom-0 inset-x-0 p-2 opacity-0 group-hover:opacity-100 group-active:opacity-100 transition-opacity flex items-center justify-between bg-gradient-to-t from-black/80 via-black/30 to-transparent">
-                    <span className="font-mono text-[10px] text-white/90 truncate max-w-[70%] bg-black/50 px-1.5 py-0.5 rounded">
-                      {photo.filename}
-                    </span>
-                    <span className="text-[10px] text-white/80 bg-black/50 px-1.5 py-0.5 rounded">
-                      Perbesar
-                    </span>
-                  </div>
-                </div>
+                  {folder} <span className="text-[10px] opacity-75">{count}</span>
+                </button>
               )
             })}
           </div>
+        </div>
+      </header>
+
+      {/* Main Photo Grid (Full-Width Edge-to-Edge with Larger Photos) */}
+      <main className="w-full px-1 sm:px-2 pt-2 sm:pt-2.5 flex-1 flex flex-col justify-between">
+        {filteredPhotos.length === 0 ? (
+          <div className="py-20 text-center">
+            <p className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-stone-500'}`}>
+              {mainTab === 'highlight' || mainTab === 'terpilih'
+                ? 'Belum ada foto yang dipilih. Silakan pilih foto favorit Anda pada tab "Semua".'
+                : 'Tidak ada foto pada kategori ini.'}
+            </p>
+          </div>
+        ) : (
+          /* Kolase Foto Seleksi (Potrait & Landscape Bersatu Harmonis) */
+          <div className="flex gap-1.5 sm:gap-2 items-start">
+            {selectionColumns.map((col, colIdx) => (
+              <div key={colIdx} className="flex-1 flex flex-col gap-1.5 sm:gap-2 min-w-0">
+                {col.map(({ photo, originalIndex }) => {
+                  const isSelected = selectedPhotoIds.includes(photo.id)
+                  const selectionIdx = selectedPhotoIds.indexOf(photo.id)
+                  const isLoaded = Boolean(loadedPhotos[photo.id])
+                  const initialSrc =
+                    photo.thumbnailUrl ||
+                    (photo.fileId
+                      ? `https://drive.google.com/thumbnail?id=${photo.fileId}&sz=w800`
+                      : photo.url)
+                  const ratio =
+                    photoRatios[photo.id] ||
+                    (photo.aspect === 'landscape' ? 3 / 2 : 3 / 4)
+
+                  return (
+                    <div
+                      key={photo.id}
+                      onClick={() => handleToggle(photo)}
+                      style={{ aspectRatio: `${ratio}` }}
+                      className={`group relative w-full overflow-hidden rounded-lg sm:rounded-xl cursor-pointer transition-all select-none ${
+                        isDarkMode
+                          ? 'bg-slate-900'
+                          : 'bg-stone-200'
+                      } ${
+                        isSelected
+                          ? 'border-[2.5px] border-[#C9A26A] shadow-md'
+                          : 'border-[2.5px] border-transparent hover:border-white/20 hover:brightness-95'
+                      }`}
+                    >
+                      {/* Skeleton Placeholder */}
+                      {!isLoaded && (
+                        <div
+                          className={`absolute inset-0 animate-pulse ${
+                            isDarkMode ? 'bg-slate-800/60' : 'bg-stone-300/60'
+                          }`}
+                        />
+                      )}
+
+                      <img
+                        src={initialSrc}
+                        alt={photo.filename}
+                        loading={originalIndex < 20 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        // @ts-ignore
+                        fetchPriority={originalIndex < 10 ? 'high' : 'auto'}
+                        referrerPolicy="no-referrer"
+                        onLoad={(e) => {
+                          const img = e.currentTarget
+                          if (img.naturalWidth && img.naturalHeight) {
+                            const r = img.naturalWidth / img.naturalHeight
+                            setPhotoRatios((prev) => {
+                              if (prev[photo.id] && Math.abs(prev[photo.id] - r) < 0.01) return prev
+                              return { ...prev, [photo.id]: r }
+                            })
+                          }
+                          setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
+                        }}
+                        onError={(e) => {
+                          setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
+                          const fileId = photo.fileId || photo.id
+                          const target = e.currentTarget
+                          if (!target.dataset.triedProxy && fileId) {
+                            target.dataset.triedProxy = 'true'
+                            target.src = `/api/drive-image?id=${fileId}&sz=800`
+                          } else if (!target.dataset.triedLh3 && fileId) {
+                            target.dataset.triedLh3 = 'true'
+                            target.src = `https://lh3.googleusercontent.com/d/${fileId}`
+                          } else if (photo.url && target.src !== photo.url) {
+                            target.src = photo.url
+                          }
+                        }}
+                        className={`h-full w-full object-cover transition-opacity duration-200 group-hover:scale-[1.03] ${
+                          isLoaded ? 'opacity-100' : 'opacity-0'
+                        }`}
+                      />
+
+                      {/* Overlay Gelap Halus saat Terpilih atau saat Hover */}
+                      <div
+                        className={`absolute inset-0 pointer-events-none transition-opacity duration-200 ${
+                          isSelected
+                            ? 'bg-black/20 opacity-100'
+                            : 'bg-black/35 opacity-0 group-hover:opacity-100'
+                        }`}
+                      />
+
+                      {/* Center Action Buttons: Zoom (kiri) & Select (kanan) */}
+                      <div className="absolute inset-0 flex items-center justify-center gap-2 sm:gap-2.5 z-20 pointer-events-none">
+                        {/* Zoom / Search Button (Kiri) - Muncul saat hover */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openLightbox(photo, originalIndex)
+                          }}
+                          className="h-9 w-9 sm:h-10 sm:w-10 rounded-full border-2 border-white bg-black/60 hover:bg-black/90 text-white flex items-center justify-center shadow-lg transition-all hover:scale-110 active:scale-95 cursor-pointer opacity-0 group-hover:opacity-100 pointer-events-auto"
+                          title="Perbesar foto"
+                        >
+                          <Search className="h-4 w-4 stroke-[2.5]" />
+                        </button>
+
+                        {/* Select Button (Kanan) - Selalu tampil saat terpilih, atau saat hover saat belum terpilih */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleToggle(photo)
+                          }}
+                          className={`h-9 w-9 sm:h-10 sm:w-10 rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110 active:scale-95 cursor-pointer pointer-events-auto ${
+                            isSelected
+                              ? 'border-2 border-white bg-[#C9A26A] text-stone-950 opacity-100'
+                              : 'border-2 border-white bg-black/60 hover:bg-black/90 text-white opacity-0 group-hover:opacity-100'
+                          }`}
+                          title={isSelected ? 'Batalkan pilihan' : 'Pilih foto ini'}
+                        >
+                          <Check className="h-5 w-5 sm:h-5.5 sm:w-5.5 stroke-[3.5]" />
+                        </button>
+                      </div>
+
+                      {/* Bottom-Right Order Badge (Badge Nomor Urut Terpilih) */}
+                      {isSelected && (
+                        <span className="absolute bottom-2 right-2 z-20 flex items-center justify-center rounded-full bg-[#C9A26A] text-stone-950 font-bold text-[10px] sm:text-[11px] min-w-[22px] h-[22px] px-1.5 shadow-md pointer-events-none">
+                          {selectionIdx + 1}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
         )}
+
+        {/* Navigasi Selanjutnya: Semua Foto di tab Highlight */}
+        {mainTab === 'highlight' && highlightPhotos.length > 0 && (
+          <div className="flex flex-col items-center justify-center mt-12 mb-6">
+            <button
+              type="button"
+              onClick={() => {
+                setMainTab('semua')
+                window.scrollTo({ top: 0, behavior: 'smooth' })
+              }}
+              className="group flex items-center gap-4 sm:gap-5 px-6 py-2.5 sm:px-7 sm:py-3 border border-[#C9A26A]/40 hover:border-[#C9A26A] bg-transparent hover:bg-black/60 transition-all duration-300 cursor-pointer active:scale-95 shadow-sm"
+            >
+              <span
+                style={{ fontFamily: "'Inter', sans-serif" }}
+                className="text-[8px] font-semibold tracking-[0.25em] text-[#C9A26A] uppercase leading-none"
+              >
+                SELANJUTNYA
+              </span>
+              <span
+                style={{ fontFamily: "'Cormorant', 'Cormorant Garamond', Georgia, serif" }}
+                className="text-[15px] font-normal text-white group-hover:text-white transition-colors leading-none tracking-normal"
+              >
+                Semua Foto
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 text-[#C9A26A] group-hover:translate-y-0.5 transition-transform shrink-0" />
+            </button>
+          </div>
+        )}
+
+        {/* Footer Brand (Posisikan di bagian bawah sebagai footer) */}
+        <footer
+          style={{ fontFamily: "'Inter', sans-serif" }}
+          className="w-full border-t border-white/10 mt-auto pt-6 pb-2.5 sm:pb-3 text-center select-none"
+        >
+          <p className="text-[10px] font-normal tracking-[0.25em] text-[#888888] uppercase leading-relaxed">
+            PHOTO BY{' '}
+            <strong className="font-bold text-white tracking-[0.25em]">
+              LIVESOSTORY.CO
+            </strong>
+          </p>
+        </footer>
       </main>
 
-      {/* Floating Bottom Bar (appears to confirm selection) */}
+      {/* Floating Bottom Bar (Full-Width Edge-to-Edge: Lihat Pilihan & Kirim Pilihan) */}
       <div
-        className={`fixed bottom-0 inset-x-0 z-40 border-t py-3 px-4 sm:px-6 shadow-2xl backdrop-blur-md transition-all ${
+        className={`fixed bottom-0 inset-x-0 z-40 border-t py-2 sm:py-2.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] px-2 sm:px-4 shadow-2xl backdrop-blur-md transition-all ${
           isDarkMode
-            ? 'border-slate-800 bg-[#090D16]/95 text-white'
+            ? 'border-white/10 bg-[#0c0d0e]/95 text-white'
             : 'border-stone-200 bg-white/95 text-stone-900'
         }`}
       >
-        {/* Visual Progress Bar along top edge */}
-        <div className="absolute top-0 inset-x-0 h-1 bg-slate-800/60 overflow-hidden">
-          <div
-            className={`h-full transition-all duration-300 ${
-              selectedCount >= maxPhotos
-                ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
-                : 'bg-gradient-to-r from-[#9C7844] via-[#C9A26A] to-[#E8C28A]'
+        <div className="w-full flex items-center justify-between gap-2 sm:gap-3">
+          {/* Left: Button "Lihat Pilihan" (Contoh Gambar 1) */}
+          <button
+            type="button"
+            onClick={() => setMainTab(mainTab === 'terpilih' ? 'semua' : 'terpilih')}
+            className={`rounded-lg border px-4 sm:px-6 py-2.5 text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap active:scale-95 shrink-0 ${
+              mainTab === 'terpilih'
+                ? 'bg-[#ba965c] border-[#ba965c] text-white font-semibold'
+                : isDarkMode
+                ? 'bg-[#1a1a1c] hover:bg-[#252528] border-white/15 text-white'
+                : 'bg-stone-100 hover:bg-stone-200 border-stone-300 text-stone-800'
             }`}
-            style={{ width: `${Math.min(100, (selectedCount / maxPhotos) * 100)}%` }}
-          />
-        </div>
+          >
+            Lihat Pilihan {selectedCount > 0 && `(${selectedCount})`}
+          </button>
 
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <span className={`text-xs font-semibold ${isDarkMode ? 'text-slate-400' : 'text-stone-500'}`}>
-              Pilihan Foto:
-            </span>
-            <span className="text-sm font-bold">
-              <strong className={isDarkMode ? 'text-[#E8C28A]' : 'text-[#9C7844]'}>{selectedCount}</strong> / {maxPhotos} Foto
-            </span>
-
-            {/* Dynamic Status Badges */}
-            {selectedCount === 0 && (
-              <span className="hidden sm:inline-flex text-xs text-slate-500">
-                • Belum ada foto dipilih
-              </span>
-            )}
-            {selectedCount > 0 && selectedCount < maxPhotos && (
-              <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-300/90">
-                • Kurang {maxPhotos - selectedCount} foto lagi
-              </span>
-            )}
-            {selectedCount === maxPhotos && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold text-emerald-400">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Kuota Terpenuhi
-              </span>
-            )}
-            {selectedCount > maxPhotos && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-xs font-semibold text-rose-400">
-                • Kelebihan {selectedCount - maxPhotos} foto
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            <Link
-              to={`/${gallery.slug}-3?t=${gallery.shareToken}`}
-              className={`rounded-xl border px-3.5 py-2 text-xs font-semibold transition-colors hidden sm:block ${
-                isDarkMode
-                  ? 'border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-200'
-                  : 'border-stone-200 bg-white text-stone-700 hover:bg-stone-50'
-              }`}
-            >
-              Lihat Album Kenangan
-            </Link>
-
-            <button
-              type="button"
-              disabled={selectedCount < maxPhotos}
-              onClick={() => {
-                if (selectedCount < maxPhotos) return
-                setIsSubmitModalOpen(true)
-                if (gallery && gallery.status !== 'Selesai dipilih') {
-                  const updated = { ...gallery, status: 'Selesai dipilih' as const }
-                  setGallery(updated)
-                  saveOrUpdateGallery(updated)
-                }
-              }}
-              title={
-                selectedCount < maxPhotos
-                  ? `Pilih ${maxPhotos - selectedCount} foto lagi untuk menyelesaikan`
-                  : 'Selesai Memilih'
+          {/* Right: Main Button "Kirim Pilihan" (Diblokir jika belum mencapai kuota maksimal) */}
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedCount < maxPhotos) {
+                const sisa = maxPhotos - selectedCount
+                showToast(`Pilih ${sisa} foto lagi untuk mencapai batas ${maxPhotos} foto (${selectedCount}/${maxPhotos})`)
+                return
               }
-              className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs sm:text-sm font-bold transition-all ${
-                selectedCount >= maxPhotos
-                  ? 'bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 text-slate-950 shadow-lg shadow-[#C9A26A]/20 active:scale-95 cursor-pointer'
-                  : isDarkMode
-                  ? 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
-                  : 'bg-stone-200/80 text-stone-400 border border-stone-300/60 cursor-not-allowed opacity-60'
-              }`}
-            >
-              <Send className="h-3.5 w-3.5" />
-              <span>Selesai Memilih</span>
-            </button>
-          </div>
+              setIsSubmitModalOpen(true)
+              if (gallery && gallery.status !== 'Selesai dipilih') {
+                const updated = { ...gallery, status: 'Selesai dipilih' as const }
+                setGallery(updated)
+                saveOrUpdateGallery(updated)
+              }
+            }}
+            title={
+              selectedCount < maxPhotos
+                ? `Pilih ${maxPhotos - selectedCount} foto lagi untuk mengirim pilihan (${selectedCount}/${maxPhotos})`
+                : 'Kirim Pilihan'
+            }
+            style={{ fontFamily: 'Arial, sans-serif' }}
+            className={`flex-1 flex items-center justify-center gap-2 rounded-lg py-2.5 px-4 text-[16px] font-bold transition-all shadow-md select-none ${
+              selectedCount >= maxPhotos
+                ? 'bg-[#ba965c] hover:bg-[#c6a268] text-white active:scale-[0.99] cursor-pointer'
+                : 'bg-[#ba965c]/35 text-white/45 border border-white/5 cursor-not-allowed hover:bg-[#ba965c]/30'
+            }`}
+          >
+            <Send className="h-4 w-4 shrink-0 -rotate-12 sm:rotate-0" />
+            <span>Kirim Pilihan</span>
+          </button>
         </div>
       </div>
+
+      {/* Floating Scroll to Top Button */}
+      {showScrollTop && (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className={`fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] sm:bottom-20 right-3 sm:right-6 z-30 flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-full border shadow-xl backdrop-blur-md transition-all active:scale-90 cursor-pointer animate-in fade-in zoom-in-90 duration-200 ${
+            isDarkMode
+              ? 'border-white/15 bg-black/85 hover:bg-black text-white hover:text-[#C9A26A] hover:border-[#C9A26A]/50 shadow-black/80'
+              : 'border-stone-300 bg-white/95 hover:bg-white text-stone-800 hover:text-[#9C7844] hover:border-[#C9A26A]/50 shadow-stone-400/40'
+          }`}
+          title="Kembali ke atas"
+          aria-label="Kembali ke atas"
+        >
+          <ArrowUp className="h-4 w-4 sm:h-5 sm:w-5" />
+        </button>
+      )}
 
       {/* Lightbox / Modal */}
       {activePhoto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none animate-in fade-in">
           {/* Top Bar: Left Counter & Right Action Buttons */}
-          <div className="absolute top-0 inset-x-0 z-50 flex items-center justify-between p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent pointer-events-none">
+          <div className="absolute top-0 inset-x-0 z-50 flex items-center justify-between p-4 sm:p-6 pt-[max(1rem,env(safe-area-inset-top))] bg-gradient-to-b from-black/80 via-black/40 to-transparent pointer-events-none">
             {/* Top Left: Counter */}
             <div className="pointer-events-auto text-sm sm:text-base font-normal tracking-wide text-white/90">
               {activePhotoIndex + 1} / {filteredPhotos.length}
@@ -1019,25 +1061,25 @@ Terima kasih kak :)`
           <button
             type="button"
             onClick={prevPhoto}
-            className="absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 z-50 flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-white/10 hover:bg-white/25 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
+            className="absolute left-1.5 sm:left-6 top-1/2 -translate-y-1/2 z-50 flex h-8 w-8 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-black/60 hover:bg-black/90 sm:bg-white/10 sm:hover:bg-white/25 active:scale-90 text-white transition-all cursor-pointer backdrop-blur-md border border-white/15 shadow-lg"
             title="Foto Sebelumnya (Panah Kiri)"
           >
-            <ChevronLeft className="h-5 w-5 sm:h-6 sm:w-6" />
+            <ChevronLeft className="h-4 w-4 sm:h-6 sm:w-6" />
           </button>
 
           {/* Right Arrow */}
           <button
             type="button"
             onClick={nextPhoto}
-            className="absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 z-50 flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-white/10 hover:bg-white/25 active:scale-95 text-white transition-all cursor-pointer backdrop-blur-md border border-white/10 shadow-lg"
+            className="absolute right-1.5 sm:right-6 top-1/2 -translate-y-1/2 z-50 flex h-8 w-8 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-black/60 hover:bg-black/90 sm:bg-white/10 sm:hover:bg-white/25 active:scale-90 text-white transition-all cursor-pointer backdrop-blur-md border border-white/15 shadow-lg"
             title="Foto Selanjutnya (Panah Kanan)"
           >
-            <ChevronRight className="h-5 w-5 sm:h-6 sm:w-6" />
+            <ChevronRight className="h-4 w-4 sm:h-6 sm:w-6" />
           </button>
 
           {/* Center Main Photo Container (Supports Single View and Split Compare View) */}
           <div
-            className="relative flex h-full w-full items-center justify-center p-3 sm:p-8"
+            className="relative flex h-full w-full items-center justify-center p-2 sm:p-8"
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
@@ -1114,13 +1156,13 @@ Terima kasih kak :)`
                     target.src = activePhoto.thumbnailUrl
                   }
                 }}
-                className="max-h-[82vh] sm:max-h-[88vh] max-w-[94vw] w-auto h-auto object-contain rounded-lg shadow-2xl transition-transform duration-200"
+                className="max-h-[76dvh] sm:max-h-[88dvh] max-w-[96vw] sm:max-w-[94vw] w-auto h-auto object-contain rounded-lg shadow-2xl transition-transform duration-200"
               />
             )}
           </div>
 
           {/* Bottom Controls & Shortcut Hint */}
-          <div className="absolute bottom-0 inset-x-0 z-50 flex flex-col items-center justify-center pb-4 sm:pb-6 pt-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none gap-2">
+          <div className="absolute bottom-0 inset-x-0 z-50 flex flex-col items-center justify-center pb-4 sm:pb-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none gap-2">
             {!isCompareMode && (
               <div className="pointer-events-auto flex items-center gap-2">
                 <button
@@ -1165,7 +1207,7 @@ Terima kasih kak :)`
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md rounded-3xl p-6 sm:p-7 shadow-2xl border transition-all ${
+            className={`w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl p-6 sm:p-7 shadow-2xl border transition-all ${
               isDarkMode ? 'border-slate-800 bg-[#0c121e] text-slate-100' : 'border-stone-200 bg-white text-stone-900'
             }`}
           >

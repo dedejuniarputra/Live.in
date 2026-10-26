@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent, type ChangeEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Home,
   LogOut,
@@ -44,14 +44,65 @@ import {
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const [loginSuccessToast, setLoginSuccessToast] = useState(false)
+  const [createSuccessToast, setCreateSuccessToast] = useState<{
+    clientName: string
+    photoCount: number
+  } | null>(null)
+  const [copySuccessToast, setCopySuccessToast] = useState<string | null>(null)
+  const [isCopiedAll, setIsCopiedAll] = useState(false)
+
+  useEffect(() => {
+    if (copySuccessToast) {
+      const timer = setTimeout(() => {
+        setCopySuccessToast(null)
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [copySuccessToast])
+
+  // Timer auto-dismiss 3 detik untuk notifikasi login berhasil
+  useEffect(() => {
+    if (loginSuccessToast) {
+      const timer = setTimeout(() => {
+        setLoginSuccessToast(false)
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [loginSuccessToast])
+
+  // Timer auto-dismiss 3 detik untuk notifikasi galeri berhasil dibuat
+  useEffect(() => {
+    if (createSuccessToast) {
+      const timer = setTimeout(() => {
+        setCreateSuccessToast(null)
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [createSuccessToast])
+
+  // Notifikasi login berhasil dari halaman Login (hanya tampil setelah login, tidak saat refresh)
+  useEffect(() => {
+    const hasSessionFlag = sessionStorage.getItem('login_success_toast') === '1'
+    const hasStateFlag = Boolean((location.state as any)?.loginSuccess)
+
+    if (hasSessionFlag || hasStateFlag) {
+      sessionStorage.removeItem('login_success_toast')
+      if (hasStateFlag) {
+        navigate(location.pathname, { replace: true, state: {} })
+      }
+      setLoginSuccessToast(true)
+    }
+  }, [location.state, location.pathname, navigate])
   const [searchQuery, setSearchQuery] = useState('')
   const [filterStatus, setFilterStatus] = useState<
     'Semua' | 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'
   >('Semua')
 
-  // Permanent dark theme for Admin Dashboard
-  const isDarkMode = true
+  // Permanent dark theme & document title for Admin Dashboard
   useEffect(() => {
+    document.title = 'Live.IN | Dashboard Admin'
     document.documentElement.classList.add('dark')
     localStorage.setItem('livein-theme', 'dark')
   }, [])
@@ -113,17 +164,16 @@ export default function Dashboard() {
     const selectionLink = `${baseUrl}/livesotory-co/${safeSlug}`
     const albumLink = `${baseUrl}/${safeSlug}-3?t=${gallery.shareToken || 'vtmsvc3urqfm'}`
 
-    const fullMessage = `Halo ${gallery.clientName.toUpperCase()}
-Galeri foto kamu dari Livesostory.co sudah siap di Pilihin.
+    const fullMessage = `Hallo Kak, ${gallery.clientName.toUpperCase()} 👋
+Foto-foto dokumentasi dari Livesostory sudah siap nih!
 
-Pilih foto favorit kamu :
-${selectionLink}
+Yuk pilih foto favorit kamu di sini:
+👉 ${selectionLink}
 
-Bagikan album ini ke teman dan keluarga kamu :
-${albumLink}
-(bisa atur siapa yang lihat, ganti sampul, bikin pin)
+Mau pamerin ke teman & keluarga? Tinggal share link ini ya:
+👉 ${albumLink}
 
-Selamat menikmati momennya`
+Selamat memilih foto dan enjoy your moments! ✨`
 
     setShareModalData({
       clientName: gallery.clientName,
@@ -258,6 +308,9 @@ Selamat menikmati momennya`
       setIsEditScanning(false)
       if (res.success && res.photos && res.photos.length > 0) {
         setEditNewScannedPhotos(res.photos)
+        if (res.folderName && !editClientName.trim()) {
+          setEditClientName(res.folderName)
+        }
         setEditScanSuccessMsg(
           `Berhasil memindai ${res.photos.length} foto dari Google Drive!`
         )
@@ -369,7 +422,8 @@ Selamat menikmati momennya`
 
   const handleLogout = async () => {
     await signOutAdmin()
-    navigate('/login')
+    sessionStorage.setItem('logout_success_toast', '1')
+    navigate('/login', { state: { logoutSuccess: true } })
   }
 
   const showToast = (message: string) => {
@@ -403,6 +457,7 @@ Selamat menikmati momennya`
 
     try {
       await navigator.clipboard.writeText(photoDirectUrl)
+      setCopySuccessToast(`Tautan foto "${photo.filename}" berhasil disalin ke clipboard!`)
       showToast(`Tautan foto ${photo.filename} berhasil disalin!`)
     } catch {
       showToast('Gagal menyalin tautan foto.')
@@ -592,7 +647,7 @@ Selamat menikmati momennya`
         setScannedPhotos(result.photos)
         if (result.folderName) {
           setDetectedFolderName(result.folderName)
-          if (!clientName.trim()) {
+          if (!clientName.trim() || clientName === detectedFolderName) {
             setClientName(result.folderName)
           }
         }
@@ -745,6 +800,12 @@ Selamat menikmati momennya`
         )
       }
 
+      setCreateSuccessToast({
+        clientName: finalClientName,
+        photoCount: photos.length,
+      })
+      setTimeout(() => setCreateSuccessToast(null), 4500)
+
       handleResetCreateForm()
     } catch (err: any) {
       setIsScanningModalOpen(false)
@@ -882,13 +943,13 @@ Selamat menikmati momennya`
   }
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-slate-100 flex flex-col font-sans relative">
+    <div className="min-h-screen bg-[#09090b] text-stone-100 flex flex-col font-sans relative">
       {/* Grid Pattern Background Overlay (Kotak-kotak halus) */}
       <div
         className="pointer-events-none fixed inset-0 z-0"
         style={{
-          backgroundImage: `linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-             linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(to right, rgba(201, 162, 106, 0.035) 1px, transparent 1px),
+             linear-gradient(to bottom, rgba(201, 162, 106, 0.035) 1px, transparent 1px)`,
           backgroundSize: '48px 48px',
         }}
       />
@@ -901,51 +962,33 @@ Selamat menikmati momennya`
       <header
         className={`sticky top-0 z-30 px-4 sm:px-8 py-3.5 flex items-center justify-between transition-all duration-300 ${
           isScrolled
-            ? 'bg-[#0B0F19]/75 backdrop-blur-xl border-b border-slate-800/80 shadow-md shadow-black/20'
+            ? 'bg-[#09090b]/85 backdrop-blur-xl border-b border-stone-800/90 shadow-md shadow-black/30'
             : 'bg-transparent border-b border-transparent'
         }`}
       >
-        {/* Sisi Kiri: Placeholder Logo Livesostory */}
-        <div className="flex items-center gap-3">
-          {/* 
-            PLACEHOLDER LOGO LIVESTORY:
-            Anda dapat langsung mengganti blok div ini dengan tag <img>:
-            <img src="/logo-livesostory.png" alt="Livesostory Logo" className="h-9 w-auto object-contain" />
-          */}
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 p-0.5 shadow-md shadow-blue-500/20 flex items-center justify-center shrink-0">
-            <div className="h-full w-full bg-[#0B0F19] rounded-[10px] flex items-center justify-center text-white font-black text-sm tracking-wider">
-              LS
-            </div>
-          </div>
-
-          <div className="flex flex-col">
-            <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-base tracking-wider text-white">
-                LIVESOSTORY
-              </span>
-              <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20">
-                .CO
-              </span>
-            </div>
-            <span className="text-[10px] text-slate-400 font-medium tracking-wide -mt-0.5">
-              Admin Selection Studio
-            </span>
-          </div>
+        {/* Sisi Kiri: Branding Livesostory */}
+        <div className="flex flex-col">
+          <span className="font-extrabold text-base tracking-wider text-white">
+            LIVESOSTORY.CO
+          </span>
+          <span className="text-[11px] text-stone-400 font-medium tracking-wide -mt-0.5">
+            Admin Studio
+          </span>
         </div>
 
         {/* Sisi Kanan: Menu Beranda | Icon & Button Logout */}
         <div className="flex items-center gap-3 sm:gap-4">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600/15 border border-blue-500/30 text-blue-400 font-semibold text-xs sm:text-sm">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#242220] border border-[#C9A26A]/40 text-[#C9A26A] font-semibold text-xs sm:text-sm">
             <Home className="h-4 w-4" />
             <span>Beranda</span>
           </div>
 
-          <div className="h-4 w-px bg-slate-700" />
+          <div className="h-4 w-px bg-stone-800" />
 
           <button
             type="button"
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-700/60 hover:border-rose-500/30 text-xs sm:text-sm font-medium transition-all cursor-pointer"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-stone-300 hover:text-rose-400 hover:bg-rose-500/10 border border-stone-800 hover:border-rose-500/30 text-xs sm:text-sm font-medium transition-all cursor-pointer"
             title="Keluar dari akun admin"
           >
             <LogOut className="h-4 w-4" />
@@ -961,38 +1004,38 @@ Selamat menikmati momennya`
       ========================================================================= */}
       <main className="relative z-10 p-4 sm:p-6 lg:p-7 max-w-[1720px] w-full mx-auto flex-1 space-y-6">
           {/* =========================================================================
-              4 VIBRANT METRIC STAT CARDS (Exact match to reference image)
+              4 VIBRANT METRIC STAT CARDS
           ========================================================================= */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Stat 1: Total Galeri */}
               <div
                 onClick={() => setFilterStatus('Semua')}
-                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                className={`bg-[#141312] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
                   filterStatus === 'Semua'
-                    ? 'border-blue-500/60 ring-1 ring-blue-500/30'
-                    : 'border-slate-800/90 hover:border-slate-700/80'
+                    ? 'border-[#C9A26A]/70 ring-1 ring-[#C9A26A]/40'
+                    : 'border-stone-800/90 hover:border-stone-700/80'
                 }`}
                 title="Tampilkan semua galeri"
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       TOTAL GALERI
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {totalCount}
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-1">
+                    <p className="text-[10px] text-stone-400 mt-1">
                       {totalCount} total galeri aktif
                     </p>
                   </div>
-                  <div className="h-11 w-11 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center shadow-xs">
+                  <div className="h-11 w-11 rounded-xl bg-[#C9A26A]/10 text-[#C9A26A] border border-[#C9A26A]/25 flex items-center justify-center shadow-xs">
                     <FolderKanban className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-slate-800">
-                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500 rounded-full w-full" />
+                <div className="mt-4 pt-2 border-t border-stone-800">
+                  <div className="h-1 w-full bg-stone-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-[#C9A26A] rounded-full w-full" />
                   </div>
                 </div>
               </div>
@@ -1000,22 +1043,22 @@ Selamat menikmati momennya`
               {/* Stat 2: Sedang Memilih */}
               <div
                 onClick={() => setFilterStatus('Sedang memilih')}
-                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                className={`bg-[#141312] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
                   filterStatus === 'Sedang memilih'
-                    ? 'border-amber-500/60 ring-1 ring-amber-500/30'
-                    : 'border-slate-800/90 hover:border-slate-700/80'
+                    ? 'border-amber-500/70 ring-1 ring-amber-500/40'
+                    : 'border-stone-800/90 hover:border-stone-700/80'
                 }`}
                 title="Filter galeri yang sedang memilih"
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       SEDANG MEMILIH
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {selectingCount}
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-1">
+                    <p className="text-[10px] text-stone-400 mt-1">
                       {selectingCount} dari {totalCount} galeri
                     </p>
                   </div>
@@ -1023,8 +1066,8 @@ Selamat menikmati momennya`
                     <Clock className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-slate-800">
-                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div className="mt-4 pt-2 border-t border-stone-800">
+                  <div className="h-1 w-full bg-stone-800 rounded-full overflow-hidden">
                     <div
                       style={{
                         width: `${totalCount > 0 ? (selectingCount / totalCount) * 100 : 0}%`,
@@ -1038,22 +1081,22 @@ Selamat menikmati momennya`
               {/* Stat 3: Selesai Dipilih */}
               <div
                 onClick={() => setFilterStatus('Selesai dipilih')}
-                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                className={`bg-[#141312] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
                   filterStatus === 'Selesai dipilih'
-                    ? 'border-emerald-500/60 ring-1 ring-emerald-500/30'
-                    : 'border-slate-800/90 hover:border-slate-700/80'
+                    ? 'border-emerald-500/70 ring-1 ring-emerald-500/40'
+                    : 'border-stone-800/90 hover:border-stone-700/80'
                 }`}
                 title="Filter galeri yang selesai dipilih"
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       SELESAI DIPILIH
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {finishedCount}
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-1">
+                    <p className="text-[10px] text-stone-400 mt-1">
                       {finishedCount} dari {totalCount} galeri
                     </p>
                   </div>
@@ -1061,8 +1104,8 @@ Selamat menikmati momennya`
                     <CheckCircle2 className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-slate-800">
-                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div className="mt-4 pt-2 border-t border-stone-800">
+                  <div className="h-1 w-full bg-stone-800 rounded-full overflow-hidden">
                     <div
                       style={{
                         width: `${totalCount > 0 ? (finishedCount / totalCount) * 100 : 0}%`,
@@ -1076,36 +1119,36 @@ Selamat menikmati momennya`
               {/* Stat 4: Belum Mulai */}
               <div
                 onClick={() => setFilterStatus('Belum mulai')}
-                className={`bg-[#131927] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
+                className={`bg-[#141312] border rounded-2xl p-5 shadow-xs flex flex-col justify-between transition-all cursor-pointer ${
                   filterStatus === 'Belum mulai'
-                    ? 'border-purple-500/60 ring-1 ring-purple-500/30'
-                    : 'border-slate-800/90 hover:border-slate-700/80'
+                    ? 'border-stone-500/70 ring-1 ring-stone-500/40'
+                    : 'border-stone-800/90 hover:border-stone-700/80'
                 }`}
                 title="Filter galeri yang belum mulai"
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       BELUM MULAI
                     </p>
                     <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
                       {notStartedCount}
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-1">
+                    <p className="text-[10px] text-stone-400 mt-1">
                       {notStartedCount} dari {totalCount} galeri
                     </p>
                   </div>
-                  <div className="h-11 w-11 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center shadow-xs">
+                  <div className="h-11 w-11 rounded-xl bg-stone-500/10 text-stone-400 border border-stone-700 flex items-center justify-center shadow-xs">
                     <AlertCircle className="h-5 w-5 stroke-[2.2]" />
                   </div>
                 </div>
-                <div className="mt-4 pt-2 border-t border-slate-800">
-                  <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div className="mt-4 pt-2 border-t border-stone-800">
+                  <div className="h-1 w-full bg-stone-800 rounded-full overflow-hidden">
                     <div
                       style={{
                         width: `${totalCount > 0 ? (notStartedCount / totalCount) * 100 : 0}%`,
                       }}
-                      className="h-full bg-purple-500 rounded-full"
+                      className="h-full bg-stone-600 rounded-full"
                     />
                   </div>
                 </div>
@@ -1122,17 +1165,17 @@ Selamat menikmati momennya`
               GAMBAR 1: FORM BUAT GALERI BARU & SINKRONISASI DRIVE (POSISI KIRI)
           ========================================================================= */}
           <div className="w-full lg:w-[420px] xl:w-[460px] shrink-0 lg:sticky lg:top-20">
-            <div className="rounded-2xl border border-slate-700/80 bg-[#1E293B] text-white shadow-xl p-5 sm:p-6">
+            <div className="rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-xl p-5 sm:p-6">
               {/* Form Header */}
-              <div className="border-b border-slate-700/80 pb-4 mb-5 flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center shrink-0">
+              <div className="border-b border-stone-800 pb-4 mb-5 flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-[#C9A26A]/15 text-[#C9A26A] border border-[#C9A26A]/30 flex items-center justify-center shrink-0">
                   <PlusCircle className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white">
                     Buat Galeri Baru & Sinkronisasi Drive
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-xs text-stone-400 mt-0.5">
                     Tempel tautan folder Google Drive untuk membaca foto dan menerbitkan link seleksi untuk klien.
                   </p>
                 </div>
@@ -1145,10 +1188,10 @@ Selamat menikmati momennya`
                   <div className="flex items-center justify-between mb-1.5">
                     <label
                       htmlFor="driveLink"
-                      className="text-xs font-semibold text-slate-200 flex items-center gap-2"
+                      className="text-xs font-semibold text-stone-200 flex items-center gap-2"
                     >
                       <span>1. Link Folder Google Drive</span>
-                      <span className="text-[10px] text-rose-500 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded">
+                      <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
                         Wajib
                       </span>
                     </label>
@@ -1162,36 +1205,36 @@ Selamat menikmati momennya`
                       value={driveLink}
                       onChange={(e) => setDriveLink(e.target.value)}
                       placeholder="Tempel tautan folder Google Drive..."
-                      className="w-full py-2.5 pl-3.5 pr-24 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
+                      className="w-full py-2.5 pl-3.5 pr-24 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A] bg-[#0e0d0c] border-stone-800 text-white placeholder-stone-500"
                     />
                     <button
                       type="button"
                       onClick={() => handleScanLink()}
                       disabled={isScanningLink || !driveLink.trim()}
-                      className="absolute right-1.5 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold disabled:opacity-50 transition-colors cursor-pointer"
+                      className="absolute right-1.5 px-3.5 py-1.5 rounded-md bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 text-xs font-bold disabled:opacity-50 transition-colors cursor-pointer shadow-xs"
                     >
                       {isScanningLink ? 'Memindai...' : 'Pindai'}
                     </button>
                   </div>
 
                   {scanError && (
-                    <div className="mt-2.5 rounded-lg border border-rose-800 bg-rose-950/40 text-rose-200 p-3 text-xs flex items-center gap-2">
+                    <div className="mt-2.5 rounded-lg border border-rose-800/60 bg-rose-950/40 text-rose-200 p-3 text-xs flex items-center gap-2">
                       <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
                       <span>{scanError}</span>
                     </div>
                   )}
 
                   {scannedPhotos.length > 0 && (
-                    <div className="mt-3 rounded-lg border border-emerald-800 bg-emerald-950/40 text-emerald-200 p-3.5 space-y-2.5">
+                    <div className="mt-3 rounded-lg border border-stone-800 bg-[#0e0d0c] text-stone-200 p-3.5 space-y-2.5">
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-xs font-semibold">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        <div className="flex items-center gap-2 text-xs font-semibold text-[#C9A26A]">
+                          <CheckCircle2 className="h-4 w-4 text-[#C9A26A]" />
                           <span>Terdeteksi {scannedPhotos.length} Foto dari Google Drive!</span>
                         </div>
                         <button
                           type="button"
                           onClick={() => setShowAllScannedModal(true)}
-                          className="px-2.5 py-1 rounded bg-slate-800 text-slate-200 border border-slate-700 text-xs font-medium hover:bg-slate-700 cursor-pointer shadow-2xs"
+                          className="px-2.5 py-1 rounded bg-[#242220] text-stone-200 border border-stone-700 text-xs font-medium hover:bg-stone-800 cursor-pointer shadow-2xs"
                         >
                           Lihat Semua
                         </button>
@@ -1203,7 +1246,7 @@ Selamat menikmati momennya`
                           <div
                             key={ph.id || idx}
                             onClick={() => setPreviewLightboxPhoto(ph)}
-                            className="aspect-square rounded-md border border-slate-700 overflow-hidden bg-slate-900 cursor-pointer hover:scale-105 transition-all"
+                            className="aspect-square rounded-md border border-stone-800 overflow-hidden bg-[#141312] cursor-pointer hover:border-[#C9A26A]/50 hover:scale-105 transition-all"
                           >
                             <img
                               src={ph.thumbnailUrl || ph.url}
@@ -1222,10 +1265,10 @@ Selamat menikmati momennya`
                   <div className="flex items-center mb-1.5">
                     <label
                       htmlFor="clientName"
-                      className="text-xs font-semibold text-slate-200 flex items-center gap-2"
+                      className="text-xs font-semibold text-stone-200 flex items-center gap-2"
                     >
                       <span>2. Nama Klien / Acara</span>
-                      <span className="text-[10px] text-rose-500 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded">
+                      <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
                         Wajib
                       </span>
                     </label>
@@ -1237,9 +1280,9 @@ Selamat menikmati momennya`
                     value={clientName}
                     onChange={(e) => setClientName(e.target.value)}
                     placeholder="Masukkan Nama..."
-                    className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
+                    className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A] bg-[#0e0d0c] border-stone-800 text-white placeholder-stone-500"
                   />
-                  <p className="text-[11px] text-slate-400 mt-1">
+                  <p className="text-[11px] text-stone-400 mt-1">
                     Jika belum diisi, otomatis mengikuti nama folder Google Drive yang dipindai.
                   </p>
                 </div>
@@ -1250,10 +1293,10 @@ Selamat menikmati momennya`
                     <div className="flex items-center mb-1.5">
                       <label
                         htmlFor="clientWhatsapp"
-                        className="text-xs font-semibold text-slate-200 flex items-center gap-2"
+                        className="text-xs font-semibold text-stone-200 flex items-center gap-2"
                       >
                         <span>3. Nomor WhatsApp Klien</span>
-                        <span className="text-[10px] text-rose-500 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
                           Wajib
                         </span>
                       </label>
@@ -1265,23 +1308,23 @@ Selamat menikmati momennya`
                       value={clientWhatsapp}
                       onChange={handleWhatsappChange}
                       placeholder="Masukkan 08xxx..."
-                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
+                      className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A] bg-[#0e0d0c] border-stone-800 text-white placeholder-stone-500"
                     />
                   </div>
 
                   <div>
                     <label
                       htmlFor="maxPhotos"
-                      className="block text-xs font-semibold text-slate-200 mb-1.5"
+                      className="block text-xs font-semibold text-stone-200 mb-1.5"
                     >
                       4. Batas Maksimal Foto Dipilih
                     </label>
                     <div className="relative" ref={maxPhotosContainerRef}>
                       <div
-                        className={`flex items-center rounded-lg border bg-slate-900 transition-all focus-within:ring-2 overflow-hidden ${
+                        className={`flex items-center rounded-lg border bg-[#0e0d0c] transition-all focus-within:ring-1 overflow-hidden ${
                           scannedPhotos.length > 0 && Boolean(maxPhotos) && parseInt(maxPhotos) > scannedPhotos.length
                             ? 'border-rose-500 focus-within:ring-rose-500/20 focus-within:border-rose-500'
-                            : 'border-slate-700 focus-within:ring-blue-500/20 focus-within:border-blue-500'
+                            : 'border-stone-800 focus-within:ring-[#C9A26A]/30 focus-within:border-[#C9A26A]'
                         }`}
                       >
                         <input
@@ -1292,7 +1335,7 @@ Selamat menikmati momennya`
                           value={maxPhotos}
                           onChange={(e) => setMaxPhotos(e.target.value)}
                           placeholder={scannedPhotos.length > 0 ? `Maks ${scannedPhotos.length}` : '...'}
-                          className={`flex-1 py-2.5 px-3 text-xs sm:text-sm bg-transparent placeholder-slate-500 focus:outline-none ${
+                          className={`flex-1 py-2.5 px-3 text-xs sm:text-sm bg-transparent placeholder-stone-500 focus:outline-none ${
                             scannedPhotos.length > 0 && Boolean(maxPhotos) && parseInt(maxPhotos) > scannedPhotos.length
                               ? 'text-rose-400 font-semibold'
                               : 'text-white'
@@ -1301,13 +1344,13 @@ Selamat menikmati momennya`
                         <button
                           type="button"
                           onClick={toggleMaxPhotosDropdown}
-                          className="px-3 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800/80 border-l border-slate-700 transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
+                          className="px-3 py-2.5 text-stone-400 hover:text-white hover:bg-stone-800/80 border-l border-stone-800 transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
                           title="Buka pilihan preset"
                         >
                           <span className="hidden sm:inline">Pilih</span>
                           <ChevronDown
                             className={`h-4 w-4 transition-transform duration-200 ${
-                              isMaxPhotosDropdownOpen ? 'rotate-180 text-blue-400' : ''
+                              isMaxPhotosDropdownOpen ? 'rotate-180 text-[#C9A26A]' : ''
                             }`}
                           />
                         </button>
@@ -1320,7 +1363,7 @@ Selamat menikmati momennya`
                           <span>Jumlah tidak boleh melebihi foto di Drive ({scannedPhotos.length} foto).</span>
                         </p>
                       ) : scannedPhotos.length > 0 ? (
-                        <p className="text-[11px] text-blue-400 mt-1.5 font-medium leading-tight">
+                        <p className="text-[11px] text-[#C9A26A] mt-1.5 font-medium leading-tight">
                           Tersedia: {scannedPhotos.length} foto
                         </p>
                       ) : null}
@@ -1335,16 +1378,16 @@ Selamat menikmati momennya`
                           <div
                             className={`absolute right-0 ${
                               dropdownPlacement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
-                            } z-30 w-full sm:w-[260px] max-w-[calc(100vw-2.5rem)] max-h-56 overflow-y-auto rounded-xl border border-slate-700 bg-[#1E293B] shadow-2xl p-1.5 animate-in fade-in zoom-in-95`}
+                            } z-30 w-full sm:w-[260px] max-w-[calc(100vw-2.5rem)] max-h-56 overflow-y-auto rounded-xl border border-stone-800 bg-[#181716] shadow-2xl p-1.5 animate-in fade-in zoom-in-95`}
                           >
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1 flex items-center justify-between">
+                            <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider px-2 py-1 flex items-center justify-between">
                               <span>Pilih Preset Cepat:</span>
                               {scannedPhotos.length > 0 && (
-                                <span className="text-blue-400 lowercase font-medium">({scannedPhotos.length} di drive)</span>
+                                <span className="text-[#C9A26A] lowercase font-medium">({scannedPhotos.length} di drive)</span>
                               )}
                             </div>
 
-                            {/* Opsi preset semua foto yang ada di Drive - Tampil di atas agar langsung terlihat */}
+                            {/* Opsi preset semua foto yang ada di Drive */}
                             {scannedPhotos.length > 0 && (
                               <button
                                 type="button"
@@ -1354,8 +1397,8 @@ Selamat menikmati momennya`
                                 }}
                                 className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between mb-1 transition-colors cursor-pointer ${
                                   maxPhotos === String(scannedPhotos.length)
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30'
+                                    ? 'bg-[#C9A26A] text-stone-950 font-bold'
+                                    : 'bg-[#242220] text-[#C9A26A] hover:bg-[#2e2b29] border border-[#C9A26A]/30'
                                 }`}
                               >
                                 <span>Semua Foto ({scannedPhotos.length} Foto)</span>
@@ -1385,10 +1428,10 @@ Selamat menikmati momennya`
                                   }}
                                   className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
                                     isExceeded
-                                      ? 'opacity-40 cursor-not-allowed text-slate-500'
+                                      ? 'opacity-40 cursor-not-allowed text-stone-500'
                                       : maxPhotos === item.val
-                                      ? 'bg-blue-600 text-white font-semibold cursor-pointer'
-                                      : 'text-slate-200 hover:bg-slate-800 hover:text-white cursor-pointer'
+                                      ? 'bg-[#C9A26A] text-stone-950 font-semibold cursor-pointer'
+                                      : 'text-stone-200 hover:bg-[#242220] hover:text-white cursor-pointer'
                                   }`}
                                 >
                                   <span>{item.label}</span>
@@ -1408,19 +1451,19 @@ Selamat menikmati momennya`
                 </div>
 
                 {/* Checkbox Download */}
-                <div className="p-3.5 rounded-lg border bg-slate-900/60 border-slate-700">
+                <div className="p-3.5 rounded-lg border bg-[#0e0d0c] border-stone-800">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={allowDownload}
                       onChange={(e) => setAllowDownload(e.target.checked)}
-                      className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      className="h-4 w-4 rounded border-stone-700 bg-stone-900 text-[#C9A26A] accent-[#C9A26A] focus:ring-[#C9A26A] cursor-pointer"
                     />
                     <div>
                       <span className="text-xs font-semibold text-white">
                         Izinkan Klien Mengunduh Foto
                       </span>
-                      <p className="text-xs text-slate-400 mt-0.5">
+                      <p className="text-xs text-stone-400 mt-0.5">
                         Jika dinonaktifkan, klien hanya dapat melihat dan memilih foto tanpa tombol unduh.
                       </p>
                     </div>
@@ -1428,18 +1471,18 @@ Selamat menikmati momennya`
                 </div>
 
                 {/* Action Buttons */}
-                <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-700">
+                <div className="pt-3 flex items-center justify-end gap-3 border-t border-stone-800">
                   <button
                     type="button"
                     onClick={handleResetCreateForm}
-                    className="px-4 py-2.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                    className="px-4 py-2.5 rounded-lg border border-stone-800 text-stone-300 hover:bg-stone-900 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
                   >
                     Batal
                   </button>
                   <button
                     type="submit"
                     disabled={isScanningModalOpen}
-                    className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold transition-colors shadow-xs cursor-pointer flex items-center gap-2"
+                    className="px-5 py-2.5 rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] disabled:opacity-50 text-stone-950 text-xs sm:text-sm font-bold transition-colors shadow-xs cursor-pointer flex items-center gap-2"
                   >
                     <Check className="h-4 w-4 stroke-[2.5]" />
                     <span>Buat & Simpan Galeri</span>
@@ -1455,10 +1498,10 @@ Selamat menikmati momennya`
           <div className="flex-1 min-w-0 space-y-4">
 
               {/* Search & Filter Bar */}
-              <div className="p-4 rounded-xl border flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-[#1E293B] border-slate-700/80">
+              <div className="p-4 rounded-xl border flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-[#141312] border-stone-800">
                 {/* Search Box */}
                 <div className="relative flex-1">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
                     <Search className="h-4 w-4" />
                   </div>
                   <input
@@ -1466,13 +1509,13 @@ Selamat menikmati momennya`
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Cari nama klien, slug, atau nomor WhatsApp..."
-                    className="w-full pl-9 pr-8 py-2 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-900 border-slate-700 text-white placeholder-slate-500"
+                    className="w-full pl-9 pr-8 py-2 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A] bg-[#0e0d0c] border-stone-800 text-white placeholder-stone-500"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery('')}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-stone-400 hover:text-stone-200 cursor-pointer"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -1489,8 +1532,8 @@ Selamat menikmati momennya`
                         onClick={() => setFilterStatus(st)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
                           filterStatus === st
-                            ? 'bg-blue-600 text-white shadow-xs'
-                            : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                            ? 'bg-[#242220] border border-[#C9A26A]/40 text-[#C9A26A] shadow-xs'
+                            : 'bg-[#0e0d0c] border border-stone-800/80 text-stone-400 hover:bg-stone-900 hover:text-stone-200'
                         }`}
                       >
                         {st}
@@ -1502,10 +1545,10 @@ Selamat menikmati momennya`
 
               {/* Sub-bar Filter Waktu & Hapus Semua (Khusus Tab Selesai Dipilih) */}
               {filterStatus === 'Selesai dipilih' && (
-                <div className="p-3 sm:px-4 sm:py-3 rounded-xl border bg-slate-900/90 border-slate-700/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 animate-in fade-in">
+                <div className="p-3 sm:px-4 sm:py-3 rounded-xl border bg-[#141312] border-stone-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 animate-in fade-in">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
-                      <Clock className="h-3.5 w-3.5 text-blue-400" />
+                    <span className="text-xs font-semibold text-stone-400 flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-[#C9A26A]" />
                       Rentang Waktu:
                     </span>
                     <button
@@ -1513,8 +1556,8 @@ Selamat menikmati momennya`
                       onClick={() => setFinishedTimeFilter('all')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
                         finishedTimeFilter === 'all'
-                          ? 'bg-blue-600 text-white shadow-xs font-bold'
-                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+                          ? 'bg-[#242220] border border-[#C9A26A]/40 text-[#C9A26A] shadow-xs font-bold'
+                          : 'bg-[#0e0d0c] border border-stone-800 text-stone-300 hover:bg-stone-900 hover:text-white'
                       }`}
                     >
                       Semua Waktu ({finishedCount})
@@ -1524,8 +1567,8 @@ Selamat menikmati momennya`
                       onClick={() => setFinishedTimeFilter('older_1_month')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 ${
                         finishedTimeFilter === 'older_1_month'
-                          ? 'bg-amber-600 text-white shadow-xs font-bold'
-                          : 'bg-slate-800 text-amber-300 hover:bg-slate-700 hover:text-amber-200'
+                          ? 'bg-amber-600/30 border border-amber-500/50 text-amber-300 shadow-xs font-bold'
+                          : 'bg-[#0e0d0c] border border-stone-800 text-amber-400/80 hover:bg-stone-900 hover:text-amber-300'
                       }`}
                     >
                       <span>&gt; 1 Bulan ({olderThanOneMonthFinishedCount})</span>
@@ -1554,14 +1597,14 @@ Selamat menikmati momennya`
 
               {/* Gallery Cards Grid */}
               {filteredGalleries.length === 0 ? (
-                <div className="p-12 text-center rounded-xl border bg-[#1E293B] border-slate-700">
-                  <div className="h-12 w-12 rounded-full bg-blue-950/40 text-blue-500 mx-auto flex items-center justify-center mb-3">
+                <div className="p-12 text-center rounded-xl border bg-[#141312] border-stone-800">
+                  <div className="h-12 w-12 rounded-full bg-[#C9A26A]/10 text-[#C9A26A] border border-[#C9A26A]/20 mx-auto flex items-center justify-center mb-3">
                     <Search className="h-6 w-6" />
                   </div>
                   <h3 className="text-base font-bold text-white">
                     Tidak Ada Galeri yang Cocok
                   </h3>
-                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                  <p className="text-xs text-stone-400 mt-1 max-w-sm mx-auto">
                     {searchQuery
                       ? `Tidak ditemukan galeri dengan kata kunci "${searchQuery}". Coba kata pencarian lain.`
                       : 'Belum ada galeri foto yang dibuat.'}
@@ -1575,7 +1618,7 @@ Selamat menikmati momennya`
                       el?.focus()
                       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                     }}
-                    className="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                    className="mt-4 bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 font-bold px-4 py-2 rounded-lg text-xs transition-colors cursor-pointer shadow-xs"
                   >
                     + Buat Galeri Baru
                   </button>
@@ -1591,12 +1634,12 @@ Selamat menikmati momennya`
                     return (
                       <div
                         key={gallery.id}
-                        className="rounded-xl border transition-all hover:shadow-md flex flex-col justify-between overflow-hidden bg-[#1E293B] border-slate-700/80 hover:border-slate-600 shadow-xs"
+                        className="rounded-xl border transition-all hover:shadow-md flex flex-col justify-between overflow-hidden bg-[#141312] border-stone-800 hover:border-[#C9A26A]/40 shadow-xs"
                       >
                         <div className="p-5 space-y-4">
                           {/* Client Info & Cover */}
                           <div className="flex gap-3.5 items-start">
-                            <div className="relative h-20 w-20 shrink-0 rounded-lg overflow-hidden border border-slate-700 bg-slate-900">
+                            <div className="relative h-20 w-20 shrink-0 rounded-lg overflow-hidden border border-stone-800 bg-[#0e0d0c]">
                               {gallery.coverUrl ? (
                                 <img
                                   src={gallery.coverUrl}
@@ -1607,7 +1650,7 @@ Selamat menikmati momennya`
                                   }}
                                 />
                               ) : (
-                                <div className="h-full w-full flex items-center justify-center text-slate-400 text-xs">
+                                <div className="h-full w-full flex items-center justify-center text-stone-500 text-xs">
                                   No Photo
                                 </div>
                               )}
@@ -1620,34 +1663,34 @@ Selamat menikmati momennya`
                               <h4 className="font-bold text-base text-white truncate">
                                 {gallery.clientName}
                               </h4>
-                              <p className="text-xs text-slate-400 mt-1 flex items-center gap-1.5">
-                                <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              <p className="text-xs text-stone-400 mt-1 flex items-center gap-1.5">
+                                <Calendar className="h-3.5 w-3.5 shrink-0 text-stone-400" />
                                 <span>{gallery.date || 'Tanpa Tanggal'}</span>
                               </p>
-                              <p className="text-xs text-slate-400 flex items-center gap-1.5 truncate mt-0.5">
-                                <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                              <p className="text-xs text-stone-400 flex items-center gap-1.5 truncate mt-0.5">
+                                <Phone className="h-3.5 w-3.5 shrink-0 text-stone-400" />
                                 <span>{gallery.whatsapp || '-'}</span>
                               </p>
 
                               {/* Status Badge & View Count */}
-                              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                              <div className="mt-2.5 flex items-center gap-1.5 flex-nowrap">
                                 <span
-                                  className={`inline-block px-2.5 py-0.5 text-[11px] font-semibold rounded-full ${
+                                  className={`inline-flex items-center justify-center px-2 py-0.5 text-[10px] font-semibold rounded-full whitespace-nowrap shrink-0 ${
                                     gallery.status === 'Selesai dipilih'
                                       ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-800'
                                       : gallery.status === 'Sedang memilih'
                                       ? 'bg-amber-950/40 text-amber-300 border border-amber-800'
-                                      : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                      : 'bg-stone-800 text-stone-300 border border-stone-700'
                                   }`}
                                 >
                                   {gallery.status}
                                 </span>
 
                                 <span
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-full bg-slate-800/90 text-slate-300 border border-slate-700"
+                                  className="inline-flex items-center justify-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-full bg-stone-800/90 text-stone-300 border border-stone-700 whitespace-nowrap shrink-0"
                                   title="Jumlah kali galeri ini telah dibuka oleh klien"
                                 >
-                                  <Eye className="h-3 w-3 text-slate-400" />
+                                  <Eye className="h-3 w-3 text-stone-400 shrink-0" />
                                   <span>Dibuka {gallery.viewCount || (gallery.isClientViewed ? 1 : 0)}x</span>
                                 </span>
                               </div>
@@ -1655,20 +1698,20 @@ Selamat menikmati momennya`
                           </div>
 
                           {/* Progress Meter */}
-                          <div className="p-3 rounded-lg border bg-slate-900/60 border-slate-700/60">
-                            <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 mb-1.5">
+                          <div className="p-3 rounded-lg border bg-[#0e0d0c] border-stone-800">
+                            <div className="flex items-center justify-between text-xs text-stone-300 mb-1.5">
                               <span className="font-medium">Foto Dipilih:</span>
-                              <span className="font-bold text-slate-900 dark:text-white">
+                              <span className="font-bold text-white">
                                 {selectedCount} / {maxP} ({progressPercent}%)
                               </span>
                             </div>
-                            <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div className="h-2 w-full rounded-full bg-stone-800 overflow-hidden">
                               <div
                                 style={{ width: `${progressPercent}%` }}
-                                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                                className="h-full bg-[#C9A26A] rounded-full transition-all duration-300"
                               />
                             </div>
-                            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-2">
+                            <div className="flex items-center justify-between text-[11px] text-stone-400 mt-2">
                               <span>Tanpa batas waktu</span>
                               <span>{gallery.allowDownload ? 'Download ON' : 'Download OFF'}</span>
                             </div>
@@ -1679,7 +1722,7 @@ Selamat menikmati momennya`
                             <button
                               type="button"
                               onClick={() => setViewingSelectedGallery(gallery)}
-                              className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer"
+                              className="w-full py-2 px-3 rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-[#C9A26A] border border-[#C9A26A]/40 font-semibold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer"
                             >
                               <CheckCircle2 className="h-4 w-4" />
                               <span>Lihat {selectedCount} Foto Pilihan Klien</span>
@@ -1688,7 +1731,7 @@ Selamat menikmati momennya`
                             <button
                               type="button"
                               disabled
-                              className="w-full py-2 px-3 rounded-lg bg-slate-800/40 border border-slate-700/60 text-slate-500 font-medium text-xs flex items-center justify-center gap-2 cursor-not-allowed"
+                              className="w-full py-2 px-3 rounded-lg bg-stone-900/40 border border-stone-800 text-stone-500 font-medium text-xs flex items-center justify-center gap-2 cursor-not-allowed"
                             >
                               <CheckCircle2 className="h-4 w-4 opacity-40" />
                               <span>Belum Ada Foto Dipilih Klien</span>
@@ -1709,7 +1752,7 @@ Selamat menikmati momennya`
                             <button
                               type="button"
                               onClick={() => handleOpenDriveFolder(gallery)}
-                              className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                              className="border border-stone-800 bg-[#1c1a19] hover:bg-[#252220] text-stone-200 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                             >
                               <Folder className="h-3.5 w-3.5" />
                               <span className="truncate">Buka Drive</span>
@@ -1718,7 +1761,7 @@ Selamat menikmati momennya`
                             <button
                               type="button"
                               onClick={() => openEditModal(gallery)}
-                              className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                              className="border border-stone-800 bg-[#1c1a19] hover:bg-[#252220] text-stone-200 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer hover:text-[#C9A26A]"
                             >
                               <Pencil className="h-3.5 w-3.5" />
                               <span>Edit</span>
@@ -1727,7 +1770,7 @@ Selamat menikmati momennya`
                             <button
                               type="button"
                               onClick={() => setGalleryToDelete(gallery)}
-                              className="border border-rose-200 dark:border-rose-900/40 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 text-rose-600 dark:text-rose-400 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                              className="border border-rose-900/40 bg-[#1c1a19] hover:bg-rose-950/30 text-rose-400 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                               <span>Hapus</span>
@@ -1741,12 +1784,12 @@ Selamat menikmati momennya`
                 </div>
 
                 {/* Pagination Controls */}
-                <div className="p-4 rounded-xl border border-slate-700/80 bg-[#1E293B] flex flex-col sm:flex-row items-center justify-between gap-4 text-xs shadow-xs">
-                  <div className="text-slate-400">
+                <div className="p-4 rounded-xl border border-stone-800 bg-[#141312] flex flex-col sm:flex-row items-center justify-between gap-4 text-xs shadow-xs">
+                  <div className="text-stone-400">
                     Menampilkan <strong className="text-white">{startIndex + 1}</strong> -{' '}
                     <strong className="text-white">{Math.min(endIndex, filteredGalleries.length)}</strong> dari{' '}
                     <strong className="text-white">{filteredGalleries.length}</strong> galeri
-                    <span className="text-slate-500 ml-1.5">(9 per halaman)</span>
+                    <span className="text-stone-500 ml-1.5">(9 per halaman)</span>
                   </div>
 
                   {totalPages > 1 && (
@@ -1758,7 +1801,7 @@ Selamat menikmati momennya`
                           window.scrollTo({ top: 380, behavior: 'smooth' })
                         }}
                         disabled={safeCurrentPage === 1}
-                        className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg border border-stone-800 bg-[#0e0d0c] text-stone-300 hover:text-white hover:bg-[#242220] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 cursor-pointer"
                         title="Halaman Sebelumnya"
                       >
                         <ChevronLeft className="h-4 w-4" />
@@ -1767,7 +1810,7 @@ Selamat menikmati momennya`
 
                       {getPageNumbers(safeCurrentPage, totalPages).map((p, idx) =>
                         p === '...' ? (
-                          <span key={`dots-${idx}`} className="px-1 text-slate-500">
+                          <span key={`dots-${idx}`} className="px-1 text-stone-500">
                             ...
                           </span>
                         ) : (
@@ -1780,8 +1823,8 @@ Selamat menikmati momennya`
                             }}
                             className={`h-8 w-8 rounded-lg font-bold transition-colors cursor-pointer text-xs ${
                               safeCurrentPage === p
-                                ? 'bg-blue-600 text-white shadow-xs'
-                                : 'border border-slate-700/80 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white'
+                                ? 'bg-[#C9A26A] text-stone-950 shadow-xs'
+                                : 'border border-stone-800 bg-[#0e0d0c] text-stone-300 hover:bg-[#242220] hover:text-white'
                             }`}
                           >
                             {p}
@@ -1796,7 +1839,7 @@ Selamat menikmati momennya`
                           window.scrollTo({ top: 380, behavior: 'smooth' })
                         }}
                         disabled={safeCurrentPage === totalPages}
-                        className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg border border-stone-800 bg-[#0e0d0c] text-stone-300 hover:text-white hover:bg-[#242220] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 cursor-pointer"
                         title="Halaman Berikutnya"
                       >
                         <span className="hidden sm:inline">Berikutnya</span>
@@ -1817,35 +1860,31 @@ Selamat menikmati momennya`
 
       {/* 1. Share Ready Modal (WhatsApp Message) */}
       {isShareModalOpen && shareModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div
-            className={`w-full max-w-lg rounded-2xl border overflow-hidden shadow-2xl ${
-              isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
-            }`}
-          >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+          <div className="w-full max-w-lg rounded-2xl border overflow-hidden shadow-2xl bg-[#141312] border-stone-800 text-white">
             {/* Header */}
-            <div className="border-b border-slate-100 dark:border-slate-700 px-6 py-4 flex items-center justify-between">
+            <div className="border-b border-stone-800 px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                <div className="h-8 w-8 rounded-lg bg-[#C9A26A]/15 text-[#C9A26A] border border-[#C9A26A]/30 flex items-center justify-center">
                   <Share2 className="h-4 w-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Bagikan Link Galeri</h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Kirim undangan kurasi foto via WhatsApp</p>
+                  <h3 className="text-sm font-bold text-white">Bagikan Link Galeri</h3>
+                  <p className="text-xs text-stone-400">Kirim undangan kurasi foto via WhatsApp</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsShareModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                className="text-stone-400 hover:text-white p-1.5 rounded-lg hover:bg-[#242220] transition-colors cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             <div className="p-6 space-y-4">
-              <div className="text-xs text-slate-600 dark:text-slate-300">
-                Penerima: <span className="font-semibold text-slate-900 dark:text-white">{shareModalData.clientName}</span> ({shareModalData.whatsapp})
+              <div className="text-xs text-stone-300">
+                Penerima: <span className="font-semibold text-white">{shareModalData.clientName}</span> ({shareModalData.whatsapp})
               </div>
 
               {/* Big WhatsApp Send Button */}
@@ -1868,15 +1907,16 @@ Selamat menikmati momennya`
               </button>
 
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs font-medium text-slate-600 dark:text-slate-400">
+                <div className="flex items-center justify-between text-xs font-medium text-stone-400">
                   <span>Pratinjau Pesan:</span>
                   <button
                     type="button"
                     onClick={() => {
                       navigator.clipboard.writeText(shareModalData.fullMessage)
+                      setCopySuccessToast('Teks pesan WhatsApp berhasil disalin ke clipboard.')
                       showToast('Teks pesan berhasil disalin!')
                     }}
-                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline font-semibold cursor-pointer"
+                    className="text-xs text-[#C9A26A] hover:underline font-semibold cursor-pointer"
                   >
                     Salin Teks
                   </button>
@@ -1884,8 +1924,8 @@ Selamat menikmati momennya`
                 <textarea
                   readOnly
                   value={shareModalData.fullMessage}
-                  rows={7}
-                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 p-3 text-xs font-mono bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 focus:outline-none select-all"
+                  rows={9}
+                  className="w-full rounded-xl border border-stone-800 p-3 text-xs font-mono bg-[#0e0d0c] text-stone-200 focus:outline-none select-all leading-relaxed"
                 />
               </div>
 
@@ -1895,7 +1935,7 @@ Selamat menikmati momennya`
                   href={shareModalData.selectionLink}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300 text-center py-2 text-xs font-semibold transition-colors"
+                  className="rounded-lg border border-[#C9A26A]/30 bg-[#242220] hover:bg-[#2d2a27] text-[#C9A26A] text-center py-2 text-xs font-semibold transition-colors"
                 >
                   Buka Link Seleksi
                 </a>
@@ -1903,7 +1943,7 @@ Selamat menikmati momennya`
                   href={shareModalData.albumLink}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 text-center py-2 text-xs font-semibold transition-colors"
+                  className="rounded-lg border border-stone-800 bg-[#1c1a19] hover:bg-[#242220] text-stone-300 text-center py-2 text-xs font-semibold transition-colors"
                 >
                   Buka Link Album
                 </a>
@@ -1915,22 +1955,18 @@ Selamat menikmati momennya`
 
       {/* 2. Modal Edit Galeri */}
       {editingGallery && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div
-            className={`w-full max-w-2xl rounded-2xl border shadow-2xl my-8 ${
-              isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
-            }`}
-          >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="w-full max-w-2xl rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl my-8">
             {/* Header */}
-            <div className="border-b border-slate-100 dark:border-slate-700 px-6 py-4 flex items-center justify-between">
+            <div className="border-b border-stone-800 px-6 py-4 flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Edit Galeri</h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">{editingGallery.clientName}</p>
+                <h3 className="text-sm font-bold text-white">Edit Galeri</h3>
+                <p className="text-xs text-stone-400">{editingGallery.clientName}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setGalleryToEdit(null)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                className="text-stone-400 hover:text-white p-1.5 rounded-lg hover:bg-[#242220] transition-colors cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1939,7 +1975,7 @@ Selamat menikmati momennya`
             <form onSubmit={handleSaveEdit} className="p-6 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                     Nama Klien / Acara
                   </label>
                   <input
@@ -1948,12 +1984,12 @@ Selamat menikmati momennya`
                     value={editClientName}
                     onChange={(e) => setEditClientName(e.target.value)}
                     placeholder="Contoh: Wedding Sarah & Kevin"
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                     Nomor WhatsApp Klien
                   </label>
                   <input
@@ -1962,14 +1998,14 @@ Selamat menikmati momennya`
                     value={editWhatsapp}
                     onChange={handleEditWhatsappChange}
                     placeholder="Contoh: 081234567890"
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                     Slug URL
                   </label>
                   <input
@@ -1977,12 +2013,12 @@ Selamat menikmati momennya`
                     value={editSlug}
                     onChange={(e) => setEditSlug(e.target.value)}
                     placeholder="contoh: wedding-sarah-kevin"
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                     Status Pemilihan
                   </label>
                   <select
@@ -1995,7 +2031,7 @@ Selamat menikmati momennya`
                           | 'Selesai dipilih'
                       )
                     }
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                   >
                     <option value="Belum mulai">Belum mulai</option>
                     <option value="Sedang memilih">Sedang memilih</option>
@@ -2018,15 +2054,15 @@ Selamat menikmati momennya`
 
                   return (
                     <>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                      <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                         Batas Maksimal Foto Dipilih
                       </label>
                       <div className="relative" ref={editMaxPhotosContainerRef}>
                         <div
-                          className={`flex items-center rounded-lg border bg-white dark:bg-slate-800 transition-all focus-within:ring-2 overflow-hidden ${
+                          className={`flex items-center rounded-lg border bg-[#0e0d0c] transition-all focus-within:ring-1 overflow-hidden ${
                             isEditExceeded
                               ? 'border-rose-500 focus-within:ring-rose-500/20 focus-within:border-rose-500'
-                              : 'border-slate-200 dark:border-slate-600 focus-within:ring-blue-500/20 focus-within:border-blue-500'
+                              : 'border-stone-800 focus-within:ring-[#C9A26A]/30 focus-within:border-[#C9A26A]'
                           }`}
                         >
                           <input
@@ -2039,35 +2075,23 @@ Selamat menikmati momennya`
                             className={`flex-1 p-2.5 text-xs bg-transparent focus:outline-none ${
                               isEditExceeded
                                 ? 'text-rose-500 font-semibold'
-                                : 'text-slate-900 dark:text-white'
+                                : 'text-white'
                             }`}
                           />
                           <button
                             type="button"
                             onClick={toggleEditMaxPhotosDropdown}
-                            className="px-3 py-2.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-700 border-l border-slate-200 dark:border-slate-600 transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
+                            className="px-3 py-2.5 text-stone-400 hover:text-white hover:bg-stone-800 border-l border-stone-800 transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer shrink-0"
                             title="Buka pilihan preset"
                           >
                             <span className="hidden sm:inline">Pilih</span>
                             <ChevronDown
                               className={`h-4 w-4 transition-transform duration-200 ${
-                                isEditMaxPhotosDropdownOpen ? 'rotate-180 text-blue-500' : ''
+                                isEditMaxPhotosDropdownOpen ? 'rotate-180 text-[#C9A26A]' : ''
                               }`}
                             />
                           </button>
                         </div>
-
-                        {/* Info & Warning jika melebihi atau informasi jumlah foto di Drive */}
-                        {isEditExceeded ? (
-                          <p className="text-[11px] text-rose-500 mt-1.5 flex items-center gap-1 font-medium leading-tight">
-                            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                            <span>Batas foto tidak boleh melebihi foto di Drive ({editAvailablePhotosCount} foto).</span>
-                          </p>
-                        ) : editAvailablePhotosCount > 0 ? (
-                          <p className="text-[11px] text-blue-500 dark:text-blue-400 mt-1.5 font-medium leading-tight">
-                            Tersedia: {editAvailablePhotosCount} foto
-                          </p>
-                        ) : null}
 
                         {/* Dropdown Menu Responsif */}
                         {isEditMaxPhotosDropdownOpen && (
@@ -2079,16 +2103,16 @@ Selamat menikmati momennya`
                             <div
                               className={`absolute right-0 ${
                                 editDropdownPlacement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
-                              } z-30 w-full sm:w-[260px] max-w-[calc(100vw-2.5rem)] max-h-56 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1E293B] shadow-2xl p-1.5 animate-in fade-in zoom-in-95`}
+                              } z-30 w-full sm:w-[260px] max-w-[calc(100vw-2.5rem)] max-h-56 overflow-y-auto rounded-xl border border-stone-800 bg-[#181716] shadow-2xl p-1.5 animate-in fade-in zoom-in-95`}
                             >
-                              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1 flex items-center justify-between">
+                              <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider px-2 py-1 flex items-center justify-between">
                                 <span>Pilih Preset Cepat:</span>
                                 {editAvailablePhotosCount > 0 && (
-                                  <span className="text-blue-500 lowercase font-medium">({editAvailablePhotosCount} di drive)</span>
+                                  <span className="text-[#C9A26A] lowercase font-medium">({editAvailablePhotosCount} di drive)</span>
                                 )}
                               </div>
 
-                              {/* Opsi preset semua foto yang ada di Drive - Tampil di atas agar langsung terlihat */}
+                              {/* Opsi preset semua foto yang ada di Drive */}
                               {editAvailablePhotosCount > 0 && (
                                 <button
                                   type="button"
@@ -2098,8 +2122,8 @@ Selamat menikmati momennya`
                                   }}
                                   className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between mb-1 transition-colors cursor-pointer ${
                                     editMaxPhotos === String(editAvailablePhotosCount)
-                                      ? 'bg-blue-600 text-white'
-                                      : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30'
+                                      ? 'bg-[#C9A26A] text-stone-950 font-bold'
+                                      : 'bg-[#242220] text-[#C9A26A] hover:bg-[#2e2b29] border border-[#C9A26A]/30'
                                   }`}
                                 >
                                   <span>Semua Foto ({editAvailablePhotosCount} Foto)</span>
@@ -2130,10 +2154,10 @@ Selamat menikmati momennya`
                                     }}
                                     className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors ${
                                       isPresExceeded
-                                        ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-slate-500'
+                                        ? 'opacity-40 cursor-not-allowed text-stone-500'
                                         : editMaxPhotos === item.val
-                                        ? 'bg-blue-600 text-white font-semibold cursor-pointer'
-                                        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer'
+                                        ? 'bg-[#C9A26A] text-stone-950 font-semibold cursor-pointer'
+                                        : 'text-stone-200 hover:bg-[#242220] hover:text-white cursor-pointer'
                                     }`}
                                   >
                                     <span>{item.label}</span>
@@ -2155,7 +2179,7 @@ Selamat menikmati momennya`
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                   Link Folder Google Drive
                 </label>
                 <div className="flex gap-2">
@@ -2164,31 +2188,31 @@ Selamat menikmati momennya`
                     value={editDriveLink}
                     onChange={(e) => setEditDriveLink(e.target.value)}
                     placeholder="https://drive.google.com/drive/folders/..."
-                    className="flex-1 rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    className="flex-1 rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                   />
                   <button
                     type="button"
                     onClick={handleEditRescanDrive}
                     disabled={isEditScanning}
-                    className="rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 px-3.5 py-2 text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                    className="rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 px-3.5 py-2 text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer shrink-0"
                   >
                     {isEditScanning ? 'Memindai...' : 'Pindai Ulang'}
                   </button>
                 </div>
                 {editScanError && (
-                  <p className="text-[11px] font-medium text-rose-600 dark:text-rose-400 mt-1">
+                  <p className="text-[11px] font-medium text-rose-400 mt-1">
                     {editScanError}
                   </p>
                 )}
                 {editScanSuccessMsg && (
-                  <p className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 mt-1">
+                  <p className="text-[11px] font-medium text-emerald-400 mt-1">
                     {editScanSuccessMsg}
                   </p>
                 )}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                   PIN Keamanan Album (Opsional)
                 </label>
                 <input
@@ -2197,21 +2221,21 @@ Selamat menikmati momennya`
                   value={editPinCode}
                   onChange={(e) => setEditPinCode(e.target.value)}
                   placeholder="Contoh: 1234 (4-8 digit angka)"
-                  className="w-full rounded-lg border border-slate-200 dark:border-slate-600 p-2.5 text-xs text-slate-900 dark:text-white bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                 />
               </div>
 
-              <div className="border-t border-slate-100 dark:border-slate-700 pt-4 flex justify-end gap-2.5">
+              <div className="border-t border-stone-800 pt-4 flex justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setGalleryToEdit(null)}
-                  className="rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer"
+                  className="rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-stone-300 border border-stone-800 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                  className="rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 font-bold px-5 py-2 text-xs shadow-xs transition-colors cursor-pointer"
                 >
                   Simpan Perubahan
                 </button>
@@ -2223,27 +2247,23 @@ Selamat menikmati momennya`
 
       {/* 3. Modal Konfirmasi Hapus Galeri */}
       {galleryToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div
-            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
-              isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
-            }`}
-          >
-            <div className="h-10 w-10 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-lg mb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-2xl border border-stone-800 bg-[#141312] text-white p-6 shadow-2xl">
+            <div className="h-10 w-10 rounded-xl bg-rose-950/40 text-rose-400 border border-rose-900/40 flex items-center justify-center font-bold text-lg mb-3">
               ⚠️
             </div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            <h3 className="text-sm font-bold text-white">
               Hapus Galeri &ldquo;{galleryToDelete.clientName}&rdquo;?
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
+            <p className="text-xs text-stone-400 mt-1.5 leading-relaxed">
               Tindakan ini tidak bisa dibatalkan. Seluruh data konfigurasi dan riwayat pemilihan foto klien akan dihapus secara permanen.
             </p>
 
-            <div className="mt-6 flex justify-end gap-2.5 border-t border-slate-100 dark:border-slate-700 pt-4">
+            <div className="mt-6 flex justify-end gap-2.5 border-t border-stone-800 pt-4">
               <button
                 type="button"
                 onClick={() => setGalleryToDelete(null)}
-                className="rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer"
+                className="rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-stone-300 border border-stone-800 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer"
               >
                 Batal
               </button>
@@ -2261,28 +2281,24 @@ Selamat menikmati momennya`
 
       {/* 3b. Modal Konfirmasi Hapus Semua Galeri Selesai > 1 Bulan */}
       {isDeleteOlderModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div
-            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
-              isDarkMode ? 'bg-[#1E293B] border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'
-            }`}
-          >
-            <div className="h-10 w-10 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 flex items-center justify-center font-bold text-lg mb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-2xl border border-stone-800 bg-[#141312] text-white p-6 shadow-2xl">
+            <div className="h-10 w-10 rounded-xl bg-rose-950/40 text-rose-400 border border-rose-900/40 flex items-center justify-center font-bold text-lg mb-3">
               <Trash2 className="h-5 w-5" />
             </div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            <h3 className="text-sm font-bold text-white">
               Hapus Semua Galeri Selesai (&gt; 1 Bulan)?
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
+            <p className="text-xs text-stone-400 mt-1.5 leading-relaxed">
               Anda akan menghapus permanen <strong className="text-rose-400 font-bold">{olderThanOneMonthFinishedCount} galeri</strong> berstatus &ldquo;Selesai dipilih&rdquo; yang berumur lebih dari 1 bulan. Seluruh foto pilihan dan konfigurasi album ini akan dihapus secara permanen.
             </p>
 
-            <div className="mt-6 flex justify-end gap-2.5 border-t border-slate-100 dark:border-slate-700 pt-4">
+            <div className="mt-6 flex justify-end gap-2.5 border-t border-stone-800 pt-4">
               <button
                 type="button"
                 onClick={() => setIsDeleteOlderModalOpen(false)}
                 disabled={isDeletingOlder}
-                className="rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                className="rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-stone-300 border border-stone-800 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
               >
                 Batal
               </button>
@@ -2311,24 +2327,24 @@ Selamat menikmati momennya`
 
       {/* 4. Scanning Modal (Proses Baca Drive) */}
       {isScanningModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1E293B] text-slate-900 dark:text-white p-6 shadow-2xl text-center space-y-4">
-            <div className="h-12 w-12 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 mx-auto flex items-center justify-center">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-stone-800 bg-[#141312] text-white p-6 shadow-2xl text-center space-y-4">
+            <div className="h-12 w-12 rounded-xl bg-[#C9A26A]/15 text-[#C9A26A] border border-[#C9A26A]/30 mx-auto flex items-center justify-center">
               <Folder className="h-6 w-6 animate-pulse" />
             </div>
             <div>
-              <h3 className="text-sm font-bold">
+              <h3 className="text-sm font-bold text-white">
                 Memindai Google Drive...
               </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              <p className="text-xs text-stone-400 mt-1">
                 {scanStatusText}
               </p>
             </div>
 
-            <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+            <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
               <div
                 style={{ width: `${scanProgress}%` }}
-                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                className="h-full bg-[#C9A26A] rounded-full transition-all duration-300"
               />
             </div>
           </div>
@@ -2338,19 +2354,19 @@ Selamat menikmati momennya`
       {/* 5. Lightbox Preview Photo */}
       {previewLightboxPhoto && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 backdrop-blur-md p-4"
           onClick={() => setPreviewLightboxPhoto(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-2xl max-w-4xl max-h-[90vh] flex flex-col items-center animate-in fade-in zoom-in-95"
+            className="rounded-2xl border border-stone-800 bg-[#141312] p-3 shadow-2xl max-w-4xl max-h-[90vh] flex flex-col items-center animate-in fade-in zoom-in-95"
           >
-            <div className="w-full pb-2 mb-2 flex justify-between items-center text-xs text-slate-300">
+            <div className="w-full pb-2 mb-2 flex justify-between items-center text-xs text-stone-300">
               <span className="font-medium truncate max-w-xs">{previewLightboxPhoto.filename}</span>
               <button
                 type="button"
                 onClick={() => setPreviewLightboxPhoto(null)}
-                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                className="p-1 rounded-lg hover:bg-stone-800 text-stone-400 hover:text-white transition-colors cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -2367,27 +2383,27 @@ Selamat menikmati momennya`
       {/* 6. All Scanned Photos Modal */}
       {showAllScannedModal && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
           onClick={() => setShowAllScannedModal(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-5xl h-[85vh] rounded-2xl border border-slate-700/80 bg-[#1E293B] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
+            className="w-full max-w-5xl h-[85vh] rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
           >
             {/* Modal Header */}
-            <div className="border-b border-slate-700/80 px-6 py-4 flex items-center justify-between shrink-0 bg-[#1E293B]">
+            <div className="border-b border-stone-800 px-6 py-4 flex items-center justify-between shrink-0 bg-[#181716]">
               <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center text-sm">
+                <div className="h-9 w-9 rounded-xl bg-[#C9A26A]/15 text-[#C9A26A] border border-[#C9A26A]/30 flex items-center justify-center text-sm">
                   📸
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2.5">
                     <span>Semua Foto Terdeteksi</span>
-                    <span className="text-xs bg-blue-600/20 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-mono font-semibold">
+                    <span className="text-xs bg-[#C9A26A]/15 text-[#C9A26A] border border-[#C9A26A]/30 px-2 py-0.5 rounded-full font-mono font-semibold">
                       {scannedPhotos.length} Foto
                     </span>
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-xs text-stone-400 mt-0.5">
                     Klik foto mana saja untuk melihat pratinjau resolusi penuh.
                   </p>
                 </div>
@@ -2395,7 +2411,7 @@ Selamat menikmati momennya`
               <button
                 type="button"
                 onClick={() => setShowAllScannedModal(false)}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                className="text-stone-400 hover:text-white p-1.5 rounded-lg hover:bg-stone-800 transition-colors cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -2408,7 +2424,7 @@ Selamat menikmati momennya`
                   <div
                     key={p.id || idx}
                     onClick={() => setPreviewLightboxPhoto(p)}
-                    className="group relative w-full aspect-square rounded-xl border border-slate-700 bg-slate-900 overflow-hidden cursor-pointer shadow-xs hover:border-blue-500 hover:shadow-lg transition-all duration-200"
+                    className="group relative w-full aspect-square rounded-xl border border-stone-800 bg-[#0e0d0c] overflow-hidden cursor-pointer shadow-xs hover:border-[#C9A26A] hover:shadow-lg transition-all duration-200"
                   >
                     <img
                       src={p.thumbnailUrl || p.url}
@@ -2420,7 +2436,7 @@ Selamat menikmati momennya`
                       <span className="truncate max-w-[78%] font-medium text-[10px]">
                         {p.filename}
                       </span>
-                      <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-mono text-slate-200">
+                      <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded font-mono text-stone-200">
                         #{idx + 1}
                       </span>
                     </div>
@@ -2430,14 +2446,14 @@ Selamat menikmati momennya`
             </div>
 
             {/* Modal Footer */}
-            <div className="border-t border-slate-700/80 px-6 py-3.5 bg-[#181D2D] flex items-center justify-between text-xs text-slate-400 shrink-0">
+            <div className="border-t border-stone-800 px-6 py-3.5 bg-[#181716] flex items-center justify-between text-xs text-stone-400 shrink-0">
               <span>
                 Total <strong>{scannedPhotos.length}</strong> foto terindeks dari folder Google Drive
               </span>
               <button
                 type="button"
                 onClick={() => setShowAllScannedModal(false)}
-                className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                className="px-4 py-1.5 rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 text-xs font-bold transition-colors cursor-pointer shadow-xs"
               >
                 Tutup
               </button>
@@ -2454,17 +2470,17 @@ Selamat menikmati momennya`
 
         return (
           <div
-            className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
+            className="fixed inset-0 z-[75] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
             onClick={() => setViewingSelectedGallery(null)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-6xl h-[85vh] rounded-2xl border border-slate-700/80 bg-[#1E293B] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
+              className="w-full max-w-6xl h-[85vh] rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
             >
               {/* Modal Header */}
-              <div className="border-b border-slate-700/80 px-6 py-4 flex items-center justify-between shrink-0 bg-[#181D2D]">
+              <div className="border-b border-stone-800 px-6 py-4 flex items-center justify-between shrink-0 bg-[#181716]">
                 <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-400 flex items-center justify-center font-bold">
+                  <div className="h-10 w-10 rounded-xl bg-[#C9A26A]/15 border border-[#C9A26A]/30 text-[#C9A26A] flex items-center justify-center font-bold">
                     <CheckCircle2 className="h-5 w-5" />
                   </div>
                   <div>
@@ -2476,17 +2492,17 @@ Selamat menikmati momennya`
                         {viewingSelectedGallery.selectedPhotos || 0} Terpilih
                       </span>
                     </div>
-                    <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                      <span>Total Koleksi: <strong className="text-slate-200">{viewingSelectedGallery.photos?.length || 0}</strong> foto</span>
+                    <p className="text-xs text-stone-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span>Total Koleksi: <strong className="text-stone-200">{viewingSelectedGallery.photos?.length || 0}</strong> foto</span>
                       <span>•</span>
                       <span>Batas Maks: {viewingSelectedGallery.maxPhotos} foto</span>
                       <span>•</span>
-                      <span className="inline-flex items-center gap-1 text-blue-400">
+                      <span className="inline-flex items-center gap-1 text-[#C9A26A]">
                         <Eye className="h-3 w-3" />
                         <span>Dibuka {viewingSelectedGallery.viewCount || (viewingSelectedGallery.isClientViewed ? 1 : 0)}x</span>
                       </span>
                       <span>•</span>
-                      <span>Status: <strong className="text-slate-200">{viewingSelectedGallery.status}</strong></span>
+                      <span>Status: <strong className="text-stone-200">{viewingSelectedGallery.status}</strong></span>
                       {viewingSelectedGallery.whatsapp && (
                         <>
                           <span>•</span>
@@ -2500,7 +2516,7 @@ Selamat menikmati momennya`
                 <button
                   type="button"
                   onClick={() => setViewingSelectedGallery(null)}
-                  className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  className="text-stone-400 hover:text-white p-2 rounded-lg hover:bg-stone-800 transition-colors cursor-pointer"
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -2511,11 +2527,11 @@ Selamat menikmati momennya`
                 {selectedPhotos.length === 0 ? (
                   <div className="flex-1 flex items-center justify-center p-12 text-center">
                     <div>
-                      <div className="h-14 w-14 rounded-full bg-slate-800 text-slate-400 mx-auto flex items-center justify-center mb-3">
-                        <CheckCircle2 className="h-7 w-7 opacity-40 text-slate-500" />
+                      <div className="h-14 w-14 rounded-full bg-stone-800 text-stone-400 mx-auto flex items-center justify-center mb-3">
+                        <CheckCircle2 className="h-7 w-7 opacity-40 text-stone-500" />
                       </div>
                       <h4 className="text-base font-bold text-white">Belum Ada Foto Dipilih</h4>
-                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                      <p className="text-xs text-stone-400 mt-1 max-w-sm mx-auto">
                         Klien belum menandai foto favorit di galeri ini. Tautan seleksi telah aktif dan siap digunakan.
                       </p>
                     </div>
@@ -2529,7 +2545,7 @@ Selamat menikmati momennya`
                           <div
                             key={photo.id || idx}
                             onClick={() => setSelectedLightboxPhoto(photo)}
-                            className="group relative aspect-square rounded-xl overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer hover:border-blue-500 transition-all hover:scale-[1.02] shadow-sm"
+                            className="group relative aspect-square rounded-xl overflow-hidden border border-stone-800 bg-[#0e0d0c] cursor-pointer hover:border-[#C9A26A] transition-all hover:scale-[1.02] shadow-sm"
                           >
                             <img
                               src={photo.thumbnailUrl || photo.url}
@@ -2538,7 +2554,7 @@ Selamat menikmati momennya`
                               className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
                             />
                             {/* Number badge */}
-                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-xs text-[10px] font-bold text-blue-300 border border-blue-500/40">
+                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-xs text-[10px] font-bold text-[#C9A26A] border border-[#C9A26A]/40">
                               #{idx + 1}
                             </div>
                             {/* Check badge */}
@@ -2557,10 +2573,10 @@ Selamat menikmati momennya`
                     </div>
 
                     {/* SISI KANAN: Daftar Foto Terpilih */}
-                    <div className="w-full lg:w-[360px] xl:w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l border-slate-700/80 bg-[#131724] p-5 flex flex-col overflow-hidden">
+                    <div className="w-full lg:w-[360px] xl:w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l border-stone-800 bg-[#11100f] p-5 flex flex-col overflow-hidden">
                       {/* Header & Tombol Salin */}
                       <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
-                        <span className="text-xs sm:text-sm font-semibold text-slate-200">
+                        <span className="text-xs sm:text-sm font-semibold text-stone-200">
                           Daftar foto terpilih ({selectedPhotos.length}):
                         </span>
                         <button
@@ -2568,22 +2584,33 @@ Selamat menikmati momennya`
                           onClick={() => {
                             const text = selectedPhotos.map((p) => p.filename || `Foto-${p.id}`).join('\n')
                             navigator.clipboard.writeText(text)
-                            showToast(`${selectedPhotos.length} nama file foto berhasil disalin!`)
+                            setIsCopiedAll(true)
+                            setTimeout(() => setIsCopiedAll(false), 2000)
+                            setCopySuccessToast(`${selectedPhotos.length} nama file foto terpilih berhasil disalin ke clipboard.`)
                           }}
-                          className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                          className="px-3.5 py-1.5 rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-95"
                           title="Salin semua nama file"
                         >
-                          <Copy className="h-3.5 w-3.5" />
-                          <span>Salin Semua Nama File ({selectedPhotos.length})</span>
+                          {isCopiedAll ? (
+                            <>
+                              <Check className="h-3.5 w-3.5 stroke-[2.5]" />
+                              <span>Tersalin!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" />
+                              <span>Salin Semua ({selectedPhotos.length})</span>
+                            </>
+                          )}
                         </button>
                       </div>
 
                       {/* Box Berisi Daftar Nama File */}
-                      <div className="flex-1 min-h-[160px] rounded-xl border border-slate-700/80 bg-[#0B101E] p-3.5 flex flex-col overflow-hidden">
+                      <div className="flex-1 min-h-[160px] rounded-xl border border-stone-800 bg-[#0a0a09] p-3.5 flex flex-col overflow-hidden">
                         <textarea
                           readOnly
                           value={selectedPhotos.map((p) => p.filename || `Foto-${p.id}`).join('\n')}
-                          className="w-full flex-1 font-mono text-xs sm:text-sm text-slate-200 bg-transparent resize-none focus:outline-none select-all leading-relaxed"
+                          className="w-full flex-1 font-mono text-xs sm:text-sm text-stone-200 bg-transparent resize-none focus:outline-none select-all leading-relaxed"
                           placeholder="Belum ada foto yang dipilih..."
                         />
                       </div>
@@ -2616,14 +2643,14 @@ Selamat menikmati momennya`
               </div>
 
               {/* Modal Footer */}
-              <div className="border-t border-slate-700/80 px-6 py-3.5 bg-[#181D2D] flex items-center justify-between text-xs text-slate-400 shrink-0">
+              <div className="border-t border-stone-800 px-6 py-3.5 bg-[#181716] flex items-center justify-between text-xs text-stone-400 shrink-0">
                 <span>
                   Ketuk foto manapun untuk melihat dalam resolusi penuh
                 </span>
                 <button
                   type="button"
                   onClick={() => setViewingSelectedGallery(null)}
-                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                  className="px-4 py-1.5 rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 text-xs font-bold transition-colors cursor-pointer shadow-xs"
                 >
                   Tutup
                 </button>
@@ -2694,10 +2721,75 @@ Selamat menikmati momennya`
         </div>
       )}
 
+      {/* Notifikasi Berhasil Login (Sisi Kanan Atas - Style Default Tailwind) */}
+      {loginSuccessToast && (
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-3 w-full max-w-sm p-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="inline-flex items-center justify-center shrink-0 w-8 h-8 text-green-500 bg-green-100 rounded-lg dark:bg-green-900/40 dark:text-green-300">
+            <Check className="w-5 h-5" />
+          </div>
+          <div className="flex-1 text-sm">
+            <p className="font-semibold text-gray-900 dark:text-white">Berhasil Login!</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Selamat datang kembali di Dashboard.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLoginSuccessToast(false)}
+            className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+            aria-label="Tutup notifikasi"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Notifikasi Berhasil Menambahkan Data Galeri (Sisi Kanan Atas - Style Default Tailwind) */}
+      {createSuccessToast && (
+        <div className="fixed top-5 right-5 z-[80] flex items-center gap-3 w-full max-w-sm p-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="inline-flex items-center justify-center shrink-0 w-8 h-8 text-green-500 bg-green-100 rounded-lg dark:bg-green-900/40 dark:text-green-300">
+            <Check className="w-5 h-5" />
+          </div>
+          <div className="flex-1 text-sm">
+            <p className="font-semibold text-gray-900 dark:text-white">Galeri Berhasil Dibuat!</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Galeri "{createSuccessToast.clientName}" berhasil disimpan ({createSuccessToast.photoCount} foto disinkronkan).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCreateSuccessToast(null)}
+            className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+            aria-label="Tutup notifikasi"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Notifikasi Berhasil Salin (Sisi Kanan Atas - Style Default Tailwind) */}
+      {copySuccessToast && (
+        <div className="fixed top-5 right-5 z-[80] flex items-center gap-3 w-full max-w-sm p-4 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="inline-flex items-center justify-center shrink-0 w-8 h-8 text-green-500 bg-green-100 rounded-lg dark:bg-green-900/40 dark:text-green-300">
+            <Check className="w-5 h-5" />
+          </div>
+          <div className="flex-1 text-sm">
+            <p className="font-semibold text-gray-900 dark:text-white">Berhasil Disalin!</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{copySuccessToast}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCopySuccessToast(null)}
+            className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+            aria-label="Tutup notifikasi"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-900 px-4 py-3 shadow-xl flex items-center gap-2.5 text-xs font-medium border border-slate-800 dark:border-slate-100 animate-in fade-in slide-in-from-bottom-2">
-          <div className="h-2 w-2 rounded-full bg-blue-500 animate-ping" />
+        <div className="fixed bottom-6 right-6 z-50 rounded-xl bg-[#1c1a19] text-stone-200 px-4 py-3 shadow-xl flex items-center gap-2.5 text-xs font-medium border border-stone-800 animate-in fade-in slide-in-from-bottom-2">
+          <div className="h-2 w-2 rounded-full bg-[#C9A26A] animate-ping" />
           <span>{toastMessage}</span>
         </div>
       )}

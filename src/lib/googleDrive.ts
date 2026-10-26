@@ -118,6 +118,23 @@ export async function scanGoogleDriveFolder(
   if (envApiKey && folderId && !folderId.startsWith('drive_')) {
     try {
       const cleanKey = envApiKey.trim()
+      let detectedFolderName = ''
+
+      // Ambil nama folder asli secara langsung dari Google Drive API
+      try {
+        const folderRes = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${folderId}?fields=name&key=${cleanKey}`
+        )
+        if (folderRes.ok) {
+          const fData = (await folderRes.json()) as { name?: string }
+          if (fData?.name) {
+            detectedFolderName = fData.name.trim()
+          }
+        }
+      } catch (fErr) {
+        console.warn('[Google Drive] Gagal membaca metadata nama folder:', fErr)
+      }
+
       const allPhotos: DrivePhotoItem[] = []
       const queue: Array<{ id: string; category?: string }> = [
         { id: folderId },
@@ -174,7 +191,7 @@ export async function scanGoogleDriveFolder(
                     size: file.size ? Number(file.size) : undefined,
                     aspect,
                     category: current.category || undefined,
-                    isHighlight: allPhotos.length < 5,
+                    isHighlight: false,
                   })
                 }
               }
@@ -185,7 +202,13 @@ export async function scanGoogleDriveFolder(
       }
 
       if (allPhotos.length > 0) {
-        return { success: true, folderId, photos: allPhotos, source: 'client-api' }
+        return {
+          success: true,
+          folderId,
+          folderName: detectedFolderName || folderName || '',
+          photos: allPhotos,
+          source: 'client-api',
+        }
       }
     } catch (err) {
       console.warn('Direct Google Drive API failed', err)

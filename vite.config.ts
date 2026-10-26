@@ -173,7 +173,7 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
                             size: item.size ? Number(item.size) : undefined,
                             aspect,
                             category: current.category || undefined,
-                            isHighlight: allPhotos.length < 5,
+                            isHighlight: false,
                           })
                         }
                       }

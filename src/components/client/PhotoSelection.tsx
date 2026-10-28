@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useParams, Link, useLocation } from 'react-router-dom'
+import { useParams, useLocation } from 'react-router-dom'
 import {
   LayoutGrid,
   Check,
@@ -21,8 +21,8 @@ import {
   findGalleryBySlug,
   fetchGalleryBySlug,
   saveOrUpdateGallery,
-  getStoredGalleries,
   incrementGalleryViewCount,
+  getPhotoThumbnailUrl,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -40,11 +40,7 @@ export default function PhotoSelection() {
           targetSlug = decodeURIComponent(last).trim()
         }
       }
-      return (
-        (targetSlug ? findGalleryBySlug(targetSlug) : null) ||
-        getStoredGalleries()[0] ||
-        null
-      )
+      return targetSlug ? findGalleryBySlug(targetSlug) : null
     } catch {
       return null
     }
@@ -64,7 +60,6 @@ export default function PhotoSelection() {
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false)
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false)
   const [isCopied, setIsCopied] = useState(false)
-  const [loadedPhotos, setLoadedPhotos] = useState<Record<string, boolean>>({})
   const [photoRatios, setPhotoRatios] = useState<Record<string, number>>({})
 
   const [columnCount, setColumnCount] = useState(() => {
@@ -106,9 +101,11 @@ export default function PhotoSelection() {
   // Client gallery is permanently styled in modern dark mode (#0c0d0e)
   const isDarkMode = true
 
-  const [isLoading, setIsLoading] = useState(true)
+  const [isFetching, setIsFetching] = useState(!gallery)
 
   useEffect(() => {
+    let isCancelled = false
+
     try {
       // Decode and extract slug from route param or URL pathname
       let targetSlug = slug ? decodeURIComponent(slug).trim() : ''
@@ -121,31 +118,23 @@ export default function PhotoSelection() {
       }
 
       const applyGallery = (data: GalleryData) => {
+        setGallery(data)
+        if (data?.clientName) {
+          document.title = `Live.IN | Seleksi Foto - ${data.clientName}`
+        } else {
+          document.title = 'Live.IN | Seleksi Foto'
+        }
         const sessionKey = `livein_selection_view_${data.id}`
         if (!sessionStorage.getItem(sessionKey)) {
           const updated = incrementGalleryViewCount(data.slug || data.id)
           if (updated) {
             setGallery(updated)
             sessionStorage.setItem(sessionKey, '1')
-          } else {
-            setGallery(data)
           }
-        } else {
-          setGallery(data)
         }
-
-        if (data?.clientName) {
-          document.title = `Live.IN | Seleksi Foto - ${data.clientName}`
-        } else {
-          document.title = 'Live.IN | Seleksi Foto'
-        }
-        setIsLoading(false)
       }
 
-      const localData =
-        (targetSlug ? findGalleryBySlug(targetSlug) : null) ||
-        getStoredGalleries()[0] ||
-        null
+      const localData = targetSlug ? findGalleryBySlug(targetSlug) : null
 
       if (localData) {
         applyGallery(localData)
@@ -153,15 +142,16 @@ export default function PhotoSelection() {
 
       if (targetSlug) {
         fetchGalleryBySlug(targetSlug).then((remoteData) => {
+          if (isCancelled) return
           if (remoteData) {
             applyGallery(remoteData)
-          } else if (!localData) {
+          } else {
             setGallery(null)
-            setIsLoading(false)
           }
+          setIsFetching(false)
         })
-      } else if (!localData) {
-        setIsLoading(false)
+      } else {
+        setIsFetching(false)
       }
 
       // Check ?tab=terpilih in URL
@@ -171,10 +161,14 @@ export default function PhotoSelection() {
       }
     } catch (err) {
       console.error('[PhotoSelection] Error loading gallery:', err)
-    } finally {
-      setIsLoading(false)
+      if (!isCancelled) setIsFetching(false)
+    }
+
+    return () => {
+      isCancelled = true
     }
   }, [slug, location.pathname, location.search])
+
 
   const showToast = (msg: string) => {
     setToastMessage(msg)
@@ -185,6 +179,33 @@ export default function PhotoSelection() {
   const selectedPhotoIds = Array.isArray(gallery?.selectedPhotoIds) ? gallery.selectedPhotoIds : []
   const selectedCount = selectedPhotoIds.length
   const maxPhotos = gallery?.maxPhotos || 60
+
+  // Preload batch foto di background agar foto langsung siap tampil tanpa menunggu
+  useEffect(() => {
+    if (!photos || photos.length === 0) return
+
+    const firstBatch = photos.slice(0, 24)
+    firstBatch.forEach((p) => {
+      const src = getPhotoThumbnailUrl(p, 600)
+      if (src) {
+        const img = new Image()
+        img.src = src
+      }
+    })
+
+    const timer = setTimeout(() => {
+      const nextBatch = photos.slice(24, 72)
+      nextBatch.forEach((p) => {
+        const src = getPhotoThumbnailUrl(p, 600)
+        if (src) {
+          const img = new Image()
+          img.src = src
+        }
+      })
+    }, 400)
+
+    return () => clearTimeout(timer)
+  }, [photos])
 
   // Highlights are exclusively the photos chosen by the client
   const highlightPhotos = photos.filter(
@@ -274,8 +295,14 @@ export default function PhotoSelection() {
         ? 'Selesai dipilih'
         : 'Sedang memilih'
 
+    const firstChosenId = newSelectedIds[0]
+    const firstChosenPhoto = firstChosenId
+      ? (gallery.photos || []).find((p) => String(p.id) === String(firstChosenId))
+      : null
+
     const updatedGallery: GalleryData = {
       ...gallery,
+      coverUrl: firstChosenPhoto?.url || (gallery.photos && gallery.photos[0]?.url) || '',
       photos: updatedPhotos,
       selectedPhotoIds: newSelectedIds,
       selectedPhotos: newSelectedIds.length,
@@ -500,41 +527,21 @@ Terima kasih kak :)`
     }
   }
 
-  if (isLoading) {
+  if (isFetching && !gallery) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#090D16] text-white p-6 text-center">
-        <div className="h-7 w-7 animate-spin rounded-full border-2 border-[#C9A26A] border-t-transparent mb-3 mx-auto" />
-        <h2 className="text-base font-bold text-white">Memuat Galeri Foto...</h2>
-        <p className="text-xs text-slate-400 mt-1">Menyiapkan foto-foto terbaik Anda</p>
+      <div className="min-h-screen flex items-center justify-center bg-[#0c0d0e] text-white">
+        <div className="h-7 w-7 rounded-full border-2 border-stone-800 border-t-[#C9A26A] animate-spin" />
       </div>
     )
   }
 
   if (!gallery) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#090D16] text-white p-6 text-center">
-        <h2 className="text-lg font-bold text-white">Galeri Tidak Ditemukan</h2>
-        <p className="text-xs text-slate-400 mt-1 max-w-sm">
-          Galeri untuk link &ldquo;{slug}&rdquo; tidak ditemukan.
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#090D16] text-white p-6 text-center select-none">
+        <h2 className="text-base sm:text-lg font-semibold text-white tracking-wide">Galeri Tidak Ditemukan</h2>
+        <p className="text-xs sm:text-sm text-stone-400 mt-2 max-w-sm leading-relaxed">
+          Galeri {slug ? `"${decodeURIComponent(slug)}"` : ''} sudah tidak tersedia atau telah dihapus.
         </p>
-        <div className="flex items-center gap-3 mt-5">
-          <button
-            type="button"
-            onClick={() => {
-              const latest = getStoredGalleries()[0] || null
-              if (latest) setGallery(latest)
-            }}
-            className="rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 px-4 py-2 text-xs font-bold text-slate-950 transition-all cursor-pointer"
-          >
-            Buka Galeri Terbaru
-          </button>
-          <Link
-            to="/login"
-            className="rounded-xl bg-slate-800 hover:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-200 transition-colors"
-          >
-            Masuk ke Portal
-          </Link>
-        </div>
       </div>
     )
   }
@@ -747,12 +754,7 @@ Terima kasih kak :)`
                 {col.map(({ photo, originalIndex }) => {
                   const isSelected = selectedPhotoIds.includes(photo.id)
                   const selectionIdx = selectedPhotoIds.indexOf(photo.id)
-                  const isLoaded = Boolean(loadedPhotos[photo.id])
-                  const initialSrc =
-                    photo.thumbnailUrl ||
-                    (photo.fileId
-                      ? `https://drive.google.com/thumbnail?id=${photo.fileId}&sz=w800`
-                      : photo.url)
+                  const initialSrc = getPhotoThumbnailUrl(photo)
                   const ratio =
                     photoRatios[photo.id] ||
                     (photo.aspect === 'landscape' ? 3 / 2 : 3 / 4)
@@ -772,22 +774,13 @@ Terima kasih kak :)`
                           : 'border-[2.5px] border-transparent hover:border-white/20 hover:brightness-95'
                       }`}
                     >
-                      {/* Skeleton Placeholder */}
-                      {!isLoaded && (
-                        <div
-                          className={`absolute inset-0 animate-pulse ${
-                            isDarkMode ? 'bg-slate-800/60' : 'bg-stone-300/60'
-                          }`}
-                        />
-                      )}
-
                       <img
                         src={initialSrc}
                         alt={photo.filename}
-                        loading={originalIndex < 20 ? 'eager' : 'lazy'}
+                        loading="eager"
                         decoding="async"
                         // @ts-ignore
-                        fetchPriority={originalIndex < 10 ? 'high' : 'auto'}
+                        fetchPriority={originalIndex < 12 ? 'high' : 'auto'}
                         referrerPolicy="no-referrer"
                         onLoad={(e) => {
                           const img = e.currentTarget
@@ -798,25 +791,18 @@ Terima kasih kak :)`
                               return { ...prev, [photo.id]: r }
                             })
                           }
-                          setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                         }}
                         onError={(e) => {
-                          setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                           const fileId = photo.fileId || photo.id
                           const target = e.currentTarget
-                          if (!target.dataset.triedProxy && fileId) {
-                            target.dataset.triedProxy = 'true'
-                            target.src = `/api/drive-image?id=${fileId}&sz=800`
-                          } else if (!target.dataset.triedLh3 && fileId) {
+                          if (!target.dataset.triedLh3 && fileId) {
                             target.dataset.triedLh3 = 'true'
                             target.src = `https://lh3.googleusercontent.com/d/${fileId}`
                           } else if (photo.url && target.src !== photo.url) {
                             target.src = photo.url
                           }
                         }}
-                        className={`h-full w-full object-cover transition-opacity duration-200 group-hover:scale-[1.03] ${
-                          isLoaded ? 'opacity-100' : 'opacity-0'
-                        }`}
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                       />
 
                       {/* Overlay Gelap Halus saat Terpilih atau saat Hover */}
@@ -1089,7 +1075,7 @@ Terima kasih kak :)`
                 {/* Photo A */}
                 <div className="relative flex flex-col items-center justify-center h-full max-h-[75vh]">
                   <img
-                    src={activePhoto.url || activePhoto.thumbnailUrl || (activePhoto.fileId ? `/api/drive-image?id=${activePhoto.fileId}&sz=1200` : '')}
+                    src={activePhoto.url || (activePhoto.fileId ? `https://drive.google.com/thumbnail?id=${activePhoto.fileId}&sz=w1200` : activePhoto.thumbnailUrl || '')}
                     alt={activePhoto.filename}
                     className="max-h-[60vh] sm:max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-xl"
                   />
@@ -1115,7 +1101,7 @@ Terima kasih kak :)`
                 {/* Photo B */}
                 <div className="relative flex flex-col items-center justify-center h-full max-h-[75vh]">
                   <img
-                    src={comparePhoto.url || comparePhoto.thumbnailUrl || (comparePhoto.fileId ? `/api/drive-image?id=${comparePhoto.fileId}&sz=1200` : '')}
+                    src={comparePhoto.url || (comparePhoto.fileId ? `https://drive.google.com/thumbnail?id=${comparePhoto.fileId}&sz=w1200` : comparePhoto.thumbnailUrl || '')}
                     alt={comparePhoto.filename}
                     className="max-h-[60vh] sm:max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-xl"
                   />
@@ -1140,18 +1126,15 @@ Terima kasih kak :)`
               </div>
             ) : (
               <img
-                src={activePhoto.url || activePhoto.thumbnailUrl || (activePhoto.fileId ? `/api/drive-image?id=${activePhoto.fileId}&sz=1600` : '')}
+                src={activePhoto.url || (activePhoto.fileId ? `https://drive.google.com/thumbnail?id=${activePhoto.fileId}&sz=w1600` : activePhoto.thumbnailUrl || '')}
                 alt={activePhoto.filename}
                 referrerPolicy="no-referrer"
                 onError={(e) => {
                   const fileId = activePhoto.fileId || activePhoto.id
                   const target = e.currentTarget
-                  if (!target.dataset.triedProxy && fileId) {
-                    target.dataset.triedProxy = 'true'
-                    target.src = `/api/drive-image?id=${fileId}&sz=1600`
-                  } else if (!target.dataset.triedDirect && fileId) {
-                    target.dataset.triedDirect = 'true'
-                    target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`
+                  if (!target.dataset.triedLh3 && fileId) {
+                    target.dataset.triedLh3 = 'true'
+                    target.src = `https://lh3.googleusercontent.com/d/${fileId}`
                   } else if (activePhoto.thumbnailUrl && target.src !== activePhoto.thumbnailUrl) {
                     target.src = activePhoto.thumbnailUrl
                   }

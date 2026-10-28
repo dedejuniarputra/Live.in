@@ -304,11 +304,11 @@ Selamat memilih foto dan enjoy your moments! ✨`
     setEditScanSuccessMsg(null)
 
     try {
-      const res = await scanGoogleDriveFolder(url, editClientName)
+      const res = await scanGoogleDriveFolder(url)
       setIsEditScanning(false)
       if (res.success && res.photos && res.photos.length > 0) {
         setEditNewScannedPhotos(res.photos)
-        if (res.folderName && !editClientName.trim()) {
+        if (res.folderName) {
           setEditClientName(res.folderName)
         }
         setEditScanSuccessMsg(
@@ -640,16 +640,14 @@ Selamat memilih foto dan enjoy your moments! ✨`
     setScanError(null)
 
     try {
-      const result = await scanGoogleDriveFolder(trimmed, clientName)
+      const result = await scanGoogleDriveFolder(trimmed)
       setIsScanningLink(false)
 
       if (result.success && result.photos && result.photos.length > 0) {
         setScannedPhotos(result.photos)
         if (result.folderName) {
           setDetectedFolderName(result.folderName)
-          if (!clientName.trim() || clientName === detectedFolderName) {
-            setClientName(result.folderName)
-          }
+          setClientName(result.folderName)
         }
         showToast(`Berhasil memindai ${result.photos.length} foto dari Google Drive!`)
       } else {
@@ -735,12 +733,15 @@ Selamat memilih foto dan enjoy your moments! ✨`
             setTimeout(() => resolve({ success: false, photos: [] }), 3500)
           )
           const result = await Promise.race([
-            scanGoogleDriveFolder(cleanDriveLink, clientName),
+            scanGoogleDriveFolder(cleanDriveLink),
             timeoutPromise,
           ])
           if (result && Array.isArray(result.photos) && result.photos.length > 0) {
             photos = result.photos
-            if (result.folderName) detectedName = result.folderName
+            if (result.folderName) {
+              detectedName = result.folderName
+              setClientName(result.folderName)
+            }
           }
         } catch (_) {}
       }
@@ -1160,7 +1161,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
             - SISI KIRI (GAMBAR 1): FORM BUAT GALERI BARU
             - SISI KANAN (GAMBAR 3): KATALOG GALERI
         ========================================================================= */}
-        <div className="flex flex-col lg:flex-row gap-6 items-start">
+        <div className="flex flex-col lg:flex-row gap-6 items-stretch lg:items-start">
           {/* =========================================================================
               GAMBAR 1: FORM BUAT GALERI BARU & SINKRONISASI DRIVE (POSISI KIRI)
           ========================================================================= */}
@@ -1283,7 +1284,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
                     className="w-full py-2.5 px-3 rounded-lg border text-xs sm:text-sm transition-all focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A] bg-[#0e0d0c] border-stone-800 text-white placeholder-stone-500"
                   />
                   <p className="text-[11px] text-stone-400 mt-1">
-                    Jika belum diisi, otomatis mengikuti nama folder Google Drive yang dipindai.
+                    Otomatis mengikuti nama folder Google Drive yang dipindai (bisa disesuaikan manual).
                   </p>
                 </div>
 
@@ -1495,10 +1496,10 @@ Selamat memilih foto dan enjoy your moments! ✨`
           {/* =========================================================================
               GAMBAR 3: KATALOG GALERI (POSISI KANAN)
           ========================================================================= */}
-          <div className="flex-1 min-w-0 space-y-4">
+          <div className="w-full flex-1 min-w-0 space-y-4">
 
               {/* Search & Filter Bar */}
-              <div className="p-4 rounded-xl border flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-[#141312] border-stone-800">
+              <div className="p-4 rounded-2xl border flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-[#141312] border-stone-800">
                 {/* Search Box */}
                 <div className="relative flex-1">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
@@ -1545,7 +1546,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
 
               {/* Sub-bar Filter Waktu & Hapus Semua (Khusus Tab Selesai Dipilih) */}
               {filterStatus === 'Selesai dipilih' && (
-                <div className="p-3 sm:px-4 sm:py-3 rounded-xl border bg-[#141312] border-stone-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 animate-in fade-in">
+                <div className="p-3 sm:px-4 sm:py-3 rounded-2xl border bg-[#141312] border-stone-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 animate-in fade-in">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs font-semibold text-stone-400 flex items-center gap-1.5">
                       <Clock className="h-3.5 w-3.5 text-[#C9A26A]" />
@@ -1597,7 +1598,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
 
               {/* Gallery Cards Grid */}
               {filteredGalleries.length === 0 ? (
-                <div className="p-12 text-center rounded-xl border bg-[#141312] border-stone-800">
+                <div className="p-12 text-center rounded-2xl border bg-[#141312] border-stone-800">
                   <div className="h-12 w-12 rounded-full bg-[#C9A26A]/10 text-[#C9A26A] border border-[#C9A26A]/20 mx-auto flex items-center justify-center mb-3">
                     <Search className="h-6 w-6" />
                   </div>
@@ -1634,7 +1635,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
                     return (
                       <div
                         key={gallery.id}
-                        className="rounded-xl border transition-all hover:shadow-md flex flex-col justify-between overflow-hidden bg-[#141312] border-stone-800 hover:border-[#C9A26A]/40 shadow-xs"
+                        className="rounded-2xl border transition-all hover:shadow-md flex flex-col justify-between overflow-hidden bg-[#141312] border-stone-800 hover:border-[#C9A26A]/40 shadow-xs"
                       >
                         <div className="p-5 space-y-4">
                           {/* Client Info & Cover */}
@@ -1784,7 +1785,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
                 </div>
 
                 {/* Pagination Controls */}
-                <div className="p-4 rounded-xl border border-stone-800 bg-[#141312] flex flex-col sm:flex-row items-center justify-between gap-4 text-xs shadow-xs">
+                <div className="p-4 rounded-2xl border border-stone-800 bg-[#141312] flex flex-col sm:flex-row items-center justify-between gap-4 text-xs shadow-xs">
                   <div className="text-stone-400">
                     Menampilkan <strong className="text-white">{startIndex + 1}</strong> -{' '}
                     <strong className="text-white">{Math.min(endIndex, filteredGalleries.length)}</strong> dari{' '}

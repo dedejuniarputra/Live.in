@@ -28,6 +28,17 @@ export interface GalleryPhoto extends DrivePhotoItem {
   aspect?: 'portrait' | 'landscape'
 }
 
+export function getPhotoThumbnailUrl(photo: GalleryPhoto, size = 600): string {
+  const fileId = photo.fileId || (/^[a-zA-Z0-9_-]{25,}$/.test(photo.id) ? photo.id : '')
+  if (fileId) {
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w${size}`
+  }
+  if (photo.thumbnailUrl && !photo.thumbnailUrl.startsWith('/api/')) {
+    return photo.thumbnailUrl
+  }
+  return photo.url || ''
+}
+
 export interface GalleryData {
   id: string
   clientName: string
@@ -180,7 +191,14 @@ export function normalizeGalleryItem(item: any): GalleryData {
     slug: rawSlug,
     shareToken: (item.shareToken || 'vtmsvc3urqfm').toString(),
     pinCode: item.pinCode ? String(item.pinCode) : undefined,
-    coverUrl: (item.coverUrl || photos[0]?.url || '').toString(),
+    coverUrl: (
+      (selectedPhotoIds.length > 0
+        ? photos.find((p) => p && String(p.id) === String(selectedPhotoIds[0]))?.url
+        : undefined) ||
+      item.coverUrl ||
+      photos[0]?.url ||
+      ''
+    ).toString(),
     highlightDescription: (item.highlightDescription || '').toString(),
     selectedPhotoIds,
     photos,
@@ -189,81 +207,29 @@ export function normalizeGalleryItem(item: any): GalleryData {
   }
 }
 
+let memoryGalleries: GalleryData[] = []
+
+// Bersihkan cache galeri dari localStorage browser agar data sepenuhnya realtime dari Firestore
+try {
+  localStorage.removeItem(STORAGE_KEY)
+  localStorage.removeItem('livein_galleries_v2')
+  localStorage.removeItem('livein_galleries_v1')
+  localStorage.removeItem('livein_galleries')
+  localStorage.removeItem(DELETED_KEY)
+} catch {}
+
 export function getDeletedGalleryIds(): string[] {
-  try {
-    const raw = localStorage.getItem(DELETED_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) {
-        return parsed.map((s) => String(s).toLowerCase().trim())
-      }
-    }
-  } catch {}
   return []
 }
 
-export function saveDeletedGalleryIds(ids: string[]): void {
-  try {
-    const unique = Array.from(new Set(ids.map((s) => String(s).toLowerCase().trim())))
-    localStorage.setItem(DELETED_KEY, JSON.stringify(unique))
-  } catch (e) {
-    console.error('Failed to save deleted galleries list', e)
-  }
-}
+export function saveDeletedGalleryIds(_ids: string[]): void {}
 
 export function getStoredGalleries(): GalleryData[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    let parsed: any[] = []
-    if (raw !== null) {
-      try {
-        const p = JSON.parse(raw)
-        if (Array.isArray(p)) parsed = p
-      } catch {}
-    }
-
-    // Jika STORAGE_KEY saat ini kosong, periksa apakah ada data tersimpan di key versi sebelumnya
-    if (parsed.length === 0) {
-      const legacyKeys = [
-        'livein_galleries_v2',
-        'livein_galleries_v1',
-        'livein_galleries',
-      ]
-      for (const key of legacyKeys) {
-        try {
-          const legacyRaw = localStorage.getItem(key)
-          if (legacyRaw) {
-            const lp = JSON.parse(legacyRaw)
-            if (Array.isArray(lp) && lp.length > 0) {
-              parsed = lp
-              break
-            }
-          }
-        } catch {}
-      }
-    }
-
-    if (parsed.length > 0) {
-      const clean = parsed.filter((g) => !isDummyGallery(g)).map(normalizeGalleryItem)
-      if (clean.length > 0) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(clean))
-        return clean
-      }
-    }
-
-    return []
-  } catch {
-    return []
-  }
+  return memoryGalleries
 }
 
 export function saveStoredGalleries(galleries: GalleryData[]): void {
-  try {
-    const normalized = galleries.map(normalizeGalleryItem)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
-  } catch (e) {
-    console.error('Failed to save galleries', e)
-  }
+  memoryGalleries = galleries.map(normalizeGalleryItem)
 }
 
 export function saveOrUpdateGallery(newGallery: GalleryData): void {
@@ -368,12 +334,18 @@ export function deleteGallery(id: string, slug?: string): GalleryData[] {
 
   saveStoredGalleries(updated)
 
-  if (isFirebaseConfigured && deletedDocId) {
-    deleteDoc(doc(db, 'galleries', deletedDocId)).catch((err) =>
-      console.warn('Firestore deleteDoc failed:', err)
-    )
+  if (isFirebaseConfigured) {
+    if (deletedDocId) {
+      deleteDoc(doc(db, 'galleries', deletedDocId)).catch((err) =>
+        console.warn('Firestore deleteDoc failed:', err)
+      )
+    }
+    if (targetSlug && targetSlug !== clean(deletedDocId)) {
+      deleteDoc(doc(db, 'galleries', targetSlug)).catch(() => {})
+    }
   }
 
+  window.dispatchEvent(new Event('galleries-updated'))
   return updated
 }
 
@@ -403,45 +375,44 @@ export function deleteMultipleGalleries(ids: string[]): GalleryData[] {
     })
   }
 
+  window.dispatchEvent(new Event('galleries-updated'))
   return updated
+}
+
+export const toSlugTarget = (s?: string): string => {
+  if (!s) return ''
+  try {
+    s = decodeURIComponent(String(s))
+  } catch {}
+  return s
+    .toLowerCase()
+    .replace(/-3$/, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .trim()
 }
 
 export function findGalleryBySlug(slug: string): GalleryData | null {
   if (!slug) return null
-  let decoded = ''
-  try {
-    decoded = decodeURIComponent(slug).trim().toLowerCase()
-  } catch {
-    decoded = String(slug).trim().toLowerCase()
-  }
-  const target = decoded.replace(/-3$/, '')
+  const target = toSlugTarget(slug)
+  if (!target) return null
 
   const galleries = getStoredGalleries()
   if (!galleries || galleries.length === 0) {
     return null
   }
 
-  // 1. Exact match by slug, id, or clientName (with or without -3)
-  const exact = galleries.find((g) => {
-    const s = (g.slug || '').toLowerCase().replace(/-3$/, '')
-    const id = (g.id || '').toLowerCase().replace(/-3$/, '')
-    const name = (g.clientName || '').toLowerCase().replace(/-3$/, '')
-    return s === target || id === target || name === target
-  })
-  if (exact) return exact
-
-  // 2. Partial match
-  const partial = galleries.find((g) => {
-    const s = (g.slug || '').toLowerCase()
-    const name = (g.clientName || '').toLowerCase()
-    return (
-      (s && (s.includes(target) || target.includes(s))) ||
-      (name && (name.includes(target) || target.includes(name)))
-    )
-  })
-  if (partial) return partial
-
-  return null
+  // Exact match by slug, id, or clientName (with or without -3)
+  return (
+    galleries.find((g) => {
+      return (
+        toSlugTarget(g.slug) === target ||
+        toSlugTarget(g.id) === target ||
+        toSlugTarget(g.clientName) === target
+      )
+    }) || null
+  )
 }
 
 export function togglePhotoSelection(
@@ -482,8 +453,14 @@ export function togglePhotoSelection(
     isHighlight: newSelectedIds.includes(String(p.id)),
   }))
 
+  const firstChosenId = newSelectedIds[0]
+  const firstChosenPhoto = firstChosenId
+    ? (gallery.photos || []).find((p) => String(p.id) === String(firstChosenId))
+    : null
+
   const updatedGallery: GalleryData = {
     ...gallery,
+    coverUrl: firstChosenPhoto?.url || (gallery.photos && gallery.photos[0]?.url) || '',
     photos: updatedPhotos,
     selectedPhotoIds: newSelectedIds,
     selectedPhotos: newSelectedIds.length,
@@ -503,14 +480,14 @@ export function togglePhotoSelection(
 export function incrementGalleryViewCount(slugOrId: string): GalleryData | null {
   try {
     const galleries = getStoredGalleries()
-    const clean = (s?: string) => (s ? String(s).toLowerCase().trim() : '')
-    const target = clean(slugOrId).replace(/-3$/, '')
+    const target = toSlugTarget(slugOrId)
 
     const idx = galleries.findIndex((g) => {
-      const s = clean(g.slug).replace(/-3$/, '')
-      const id = clean(g.id).replace(/-3$/, '')
-      const name = clean(g.clientName).replace(/-3$/, '')
-      return s === target || id === target || name === target
+      return (
+        toSlugTarget(g.slug) === target ||
+        toSlugTarget(g.id) === target ||
+        toSlugTarget(g.clientName) === target
+      )
     })
 
     if (idx >= 0) {
@@ -548,29 +525,13 @@ export async function syncGalleriesFromFirestore(): Promise<GalleryData[]> {
       snap.forEach((d) => {
         const item = d.data()
         if (item) {
-          remoteGalleries.push(normalizeGalleryItem(item))
+          remoteGalleries.push(normalizeGalleryItem({ ...item, id: item.id || d.id }))
         }
       })
       if (remoteGalleries.length > 0) {
-        const local = getStoredGalleries()
-        const mergedMap = new Map<string, GalleryData>()
-        local.forEach((g) => mergedMap.set(g.id, g))
-        remoteGalleries.forEach((g) => mergedMap.set(g.id, g))
-        const merged = Array.from(mergedMap.values())
-        saveStoredGalleries(merged)
+        saveStoredGalleries(remoteGalleries)
         window.dispatchEvent(new Event('galleries-updated'))
-        return merged
-      }
-    } else {
-      // Jika di cloud masih kosong tapi di lokal sudah ada data galeri,
-      // upload data lokal ke cloud agar langsung tersinkron!
-      const local = getStoredGalleries()
-      if (local.length > 0) {
-        for (const g of local) {
-          setDoc(doc(db, 'galleries', g.id), sanitizeForFirestore(g), {
-            merge: true,
-          }).catch(() => {})
-        }
+        return remoteGalleries
       }
     }
   } catch (err) {
@@ -584,18 +545,19 @@ export async function fetchGalleryBySlug(slug: string): Promise<GalleryData | nu
   if (!isFirebaseConfigured) return local
 
   try {
+    const target = toSlugTarget(slug)
     const snap = await getDocs(collection(db, 'galleries'))
     let foundDoc: GalleryData | null = null
 
-    const clean = (s?: string) => (s ? String(s).toLowerCase().replace(/-3$/, '').trim() : '')
-    const target = clean(slug)
-
     snap.forEach((d) => {
-      const data = normalizeGalleryItem(d.data())
+      const raw = d.data()
+      if (!raw) return
+      const data = normalizeGalleryItem({ ...raw, id: raw.id || d.id })
       if (
-        clean(data.slug) === target ||
-        clean(data.id) === target ||
-        clean(data.clientName) === target
+        toSlugTarget(data.slug) === target ||
+        toSlugTarget(data.id) === target ||
+        toSlugTarget(d.id) === target ||
+        toSlugTarget(data.clientName) === target
       ) {
         foundDoc = data
       }
@@ -605,9 +567,10 @@ export async function fetchGalleryBySlug(slug: string): Promise<GalleryData | nu
       saveOrUpdateGallery(foundDoc)
       return foundDoc
     }
+
+    return null
   } catch (err) {
     console.warn('fetchGalleryBySlug cloud fetch failed:', err)
+    return local
   }
-
-  return local
 }

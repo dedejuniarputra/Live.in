@@ -22,8 +22,8 @@ import {
 import {
   findGalleryBySlug,
   fetchGalleryBySlug,
-  getStoredGalleries,
   incrementGalleryViewCount,
+  getPhotoThumbnailUrl,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -43,15 +43,33 @@ export default function AlbumShare() {
         }
       }
       const cleanSlug = rawSlug.replace(/-3$/, '')
-      return (
-        (cleanSlug ? findGalleryBySlug(cleanSlug) : null) ||
-        getStoredGalleries()[0] ||
-        null
-      )
+      return cleanSlug ? findGalleryBySlug(cleanSlug) : null
     } catch {
       return null
     }
   })
+
+  const [isFetching, setIsFetching] = useState(!gallery)
+  const [showSplash, setShowSplash] = useState(true)
+  const [isFadingOut, setIsFadingOut] = useState(false)
+
+  useEffect(() => {
+    if (gallery) {
+      const fadeTimer = setTimeout(() => {
+        setIsFadingOut(true)
+      }, 700)
+      const removeTimer = setTimeout(() => {
+        setShowSplash(false)
+      }, 1400)
+      return () => {
+        clearTimeout(fadeTimer)
+        clearTimeout(removeTimer)
+      }
+    } else if (!isFetching && !gallery) {
+      setIsFadingOut(true)
+      setShowSplash(false)
+    }
+  }, [gallery, isFetching])
 
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [activePhoto, setActivePhoto] = useState<GalleryPhoto | null>(null)
@@ -101,7 +119,6 @@ export default function AlbumShare() {
   const [isPinLocked, setIsPinLocked] = useState(false)
   const [enteredPin, setEnteredPin] = useState('')
   const [pinError, setPinError] = useState<string | null>(null)
-  const [loadedPhotos, setLoadedPhotos] = useState<Record<string, boolean>>({})
   const [photoRatios, setPhotoRatios] = useState<Record<string, number>>({})
 
   const [columnCount, setColumnCount] = useState(() => {
@@ -123,57 +140,10 @@ export default function AlbumShare() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // Splash Screen State & Font Readiness Check to prevent FOUT (Flash of Unstyled Text)
-  const [isSplashActive, setIsSplashActive] = useState(true)
-  const [isSplashFading, setIsSplashFading] = useState(false)
-  const [isFontReady, setIsFontReady] = useState(() => {
-    if (typeof document === 'undefined') return true
-    try {
-      return Boolean(
-        document.fonts &&
-        document.fonts.check("16px 'Inter'") &&
-        document.fonts.check("16px 'Cormorant Garamond'")
-      )
-    } catch {
-      return true
-    }
-  })
 
   useEffect(() => {
-    let isMounted = true
-    if (typeof document !== 'undefined' && document.fonts) {
-      document.fonts.ready
-        .then(() => {
-          if (isMounted) setIsFontReady(true)
-        })
-        .catch(() => {
-          if (isMounted) setIsFontReady(true)
-        })
-    } else {
-      setIsFontReady(true)
-    }
+    let isCancelled = false
 
-    const safety = setTimeout(() => {
-      if (isMounted) setIsFontReady(true)
-    }, 300)
-
-    const timer = setTimeout(() => {
-      if (isMounted) {
-        setIsSplashFading(true)
-        setTimeout(() => {
-          if (isMounted) setIsSplashActive(false)
-        }, 500)
-      }
-    }, 1200)
-
-    return () => {
-      isMounted = false
-      clearTimeout(safety)
-      clearTimeout(timer)
-    }
-  }, [])
-
-  useEffect(() => {
     try {
       let rawSlug = slug ? decodeURIComponent(slug).trim() : ''
       if (!rawSlug) {
@@ -209,24 +179,37 @@ export default function AlbumShare() {
         }
       }
 
-      const localData =
-        (cleanSlug ? findGalleryBySlug(cleanSlug) : null) ||
-        getStoredGalleries()[0] ||
-        null
+      const localData = cleanSlug ? findGalleryBySlug(cleanSlug) : null
 
       if (localData) {
         applyGallery(localData)
       }
 
       if (cleanSlug) {
-        fetchGalleryBySlug(cleanSlug).then((remoteData) => {
-          if (remoteData) {
-            applyGallery(remoteData)
-          }
-        })
+        fetchGalleryBySlug(cleanSlug)
+          .then((remoteData) => {
+            if (isCancelled) return
+            if (remoteData) {
+              applyGallery(remoteData)
+            } else {
+              setGallery(null)
+            }
+            setIsFetching(false)
+          })
+          .catch(() => {
+            if (!isCancelled) setIsFetching(false)
+          })
+      } else {
+        if (!localData) setGallery(null)
+        setIsFetching(false)
       }
     } catch (e) {
       console.error('[AlbumShare] Error loading gallery:', e)
+      if (!isCancelled) setIsFetching(false)
+    }
+
+    return () => {
+      isCancelled = true
     }
   }, [slug, location.pathname])
 
@@ -244,6 +227,33 @@ export default function AlbumShare() {
   const highlightPhotos = photos.filter(
     (p) => p && selectedPhotoIds.includes(p.id)
   )
+
+  // Preload batch foto di background (saat splash screen berjalan) agar foto langsung siap tampil
+  useEffect(() => {
+    if (!photos || photos.length === 0) return
+
+    const firstBatch = photos.slice(0, 24)
+    firstBatch.forEach((p) => {
+      const src = getPhotoThumbnailUrl(p, 600)
+      if (src) {
+        const img = new Image()
+        img.src = src
+      }
+    })
+
+    const timer = setTimeout(() => {
+      const nextBatch = photos.slice(24, 72)
+      nextBatch.forEach((p) => {
+        const src = getPhotoThumbnailUrl(p, 600)
+        if (src) {
+          const img = new Image()
+          img.src = src
+        }
+      })
+    }, 400)
+
+    return () => clearTimeout(timer)
+  }, [photos])
 
   // Extract unique available categories dynamically for 'Semua Foto'
   const availableCategories = Array.from(
@@ -427,90 +437,99 @@ export default function AlbumShare() {
     }
   }
 
-  const folderName =
-    gallery?.clientName ||
-    (slug ? decodeURIComponent(slug).replace(/-3$/, '').replace(/-/g, ' ') : '') ||
-    'pilihin'
 
-  const splashScreen = isSplashActive ? (
+  const effectiveSlug =
+    slug ||
+    (typeof window !== 'undefined'
+      ? window.location.pathname.split('/').filter(Boolean).pop() || ''
+      : '')
+
+  const cleanSlugToTitle = (rawSlug?: string): string => {
+    if (!rawSlug) return 'Album Kenangan'
+    try {
+      let s = decodeURIComponent(rawSlug).trim()
+      s = s.split('?')[0].split('#')[0]
+      const parts = s.split('/').filter(Boolean)
+      if (parts.length > 0) {
+        s = parts[parts.length - 1]
+      }
+      s = s.replace(/^(album|livesotory-co)[-_]/i, '')
+      s = s.replace(/-3$/i, '')
+      // Hapus suffix 4 digit random timestamp jika didahului tahun 4 digit (misal: 2026-4201 -> 2026)
+      s = s.replace(/(\b(?:19|20)\d{2})[-_]\d{4,6}$/i, '$1')
+      // Hapus suffix 4-6 digit random timestamp jika bukan tahun kalender (misal: budi-4201 -> budi)
+      s = s.replace(/[-_](?!(?:19|20)\d{2})\d{4,6}$/i, '')
+      s = s.replace(/[-_]+/g, ' ').trim()
+      if (!s) return 'Album Kenangan'
+      return s
+        .split(' ')
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ')
+    } catch {
+      return 'Album Kenangan'
+    }
+  }
+
+  const albumName =
+    gallery?.clientName?.trim() || cleanSlugToTitle(effectiveSlug)
+
+  const renderSplashScreen = (fadingOut = false) => (
     <div
-      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#09090b] text-white select-none transition-opacity duration-500 ease-out ${
-        isSplashFading ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      key="splash-screen-overlay"
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#09090b] text-white transition-opacity duration-700 select-none ${
+        fadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}
       style={{ fontFamily: "'Inter', sans-serif" }}
     >
-      <div
-        className={`flex flex-col items-center text-center px-4 transition-opacity duration-300 ${
-          isFontReady ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        <span
-          className="text-[10px] sm:text-[11px] font-medium uppercase text-[#8e857b]"
-          style={{ letterSpacing: '0.35em' }}
-        >
-          PHOTO BY
-        </span>
-        <h1
-          className="text-base sm:text-lg font-bold text-white uppercase mt-1"
-          style={{ letterSpacing: '0.22em' }}
-        >
-          LIVESOSTORY.CO
-        </h1>
-        <p className="text-xs sm:text-[13px] text-[#777777] mt-1.5 font-normal tracking-wide">
-          album by{' '}
-          <span
-            style={{ fontFamily: "'Cormorant Garamond', 'Cormorant', Georgia, serif" }}
-            className="font-normal text-sm sm:text-base text-[#C9A26A] capitalize tracking-normal"
-          >
-            {folderName}
+      <div className="flex flex-col items-center text-center px-6 max-w-sm mx-auto">
+        <div className="flex flex-col items-center">
+          <span className="text-[11px] font-semibold tracking-[0.25em] text-stone-500 uppercase">
+            PHOTO BY
           </span>
+          <h2 className="text-sm sm:text-base font-extrabold tracking-[0.2em] text-stone-100 uppercase mt-1">
+            LIVESOSTORY.CO
+          </h2>
+          <p className="text-xs text-stone-400 tracking-wide mt-2.5">
+            album by <span className="text-[#C9A26A] font-medium">{albumName}</span>
+          </p>
+        </div>
+
+        <div className="my-7">
+          <div className="h-8 w-8 rounded-full border-2 border-stone-800 border-t-[#C9A26A] animate-spin" />
+        </div>
+
+        <p className="text-xs sm:text-[13px] text-stone-400 tracking-wide">
+          Memuat foto...
         </p>
       </div>
-
-      <div className="mt-8 mb-4 h-7 w-7 sm:h-8 sm:w-8 rounded-full border-2 border-stone-800 border-t-[#C9A26A] animate-spin" />
-
-      <p
-        className={`text-xs sm:text-[13px] text-[#888888] font-normal tracking-wide transition-opacity duration-300 ${
-          isFontReady ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        Memuat foto...
-      </p>
     </div>
-  ) : null
+  )
 
   if (!gallery) {
+    if (isFetching) {
+      return (
+        <div
+          key="album-share-root"
+          style={{ fontFamily: "'Inter', sans-serif" }}
+          className="min-h-screen bg-[#09090b] text-slate-100 selection:bg-[#9C7844] selection:text-white"
+        >
+          {renderSplashScreen(false)}
+        </div>
+      )
+    }
+
     return (
       <div
+        key="album-share-root"
         style={{ fontFamily: "'Inter', sans-serif" }}
         className="min-h-screen bg-[#09090b] text-slate-100 selection:bg-[#9C7844] selection:text-white"
       >
-        {splashScreen}
-        <div className="min-h-screen flex flex-col items-center justify-center bg-[#090D16] text-white p-6 text-center">
-          <h1 className="text-xl font-bold">Album Tidak Ditemukan</h1>
-          <p className="text-sm text-slate-400 mt-2 max-w-md">
-            Tautan album &ldquo;{slug}&rdquo; tidak ditemukan atau sedang dipersiapkan.
+        <div className="min-h-screen flex flex-col items-center justify-center bg-[#090D16] text-white p-6 text-center select-none">
+          <h1 className="text-base sm:text-lg font-semibold text-white tracking-wide">Album Tidak Ditemukan</h1>
+          <p className="text-xs sm:text-sm text-stone-400 mt-2 max-w-sm leading-relaxed">
+            Tautan album {effectiveSlug ? `"${cleanSlugToTitle(effectiveSlug)}"` : ''} sudah tidak tersedia atau telah dihapus.
           </p>
-          <div className="flex items-center gap-3 mt-6">
-            <button
-              type="button"
-              onClick={() => {
-                const latest = getStoredGalleries()[0] || null
-                if (latest) {
-                  setGallery(latest)
-                }
-              }}
-              className="rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] text-slate-950 font-bold px-5 py-2.5 text-xs shadow-lg cursor-pointer hover:brightness-110"
-            >
-              Buka Album Terbaru
-            </button>
-            <Link
-              to="/login"
-              className="rounded-xl bg-slate-800 px-5 py-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-            >
-              Masuk ke Portal
-            </Link>
-          </div>
         </div>
       </div>
     )
@@ -529,10 +548,11 @@ export default function AlbumShare() {
 
     return (
       <div
+        key="album-share-root"
         style={{ fontFamily: "'Inter', sans-serif" }}
         className="min-h-screen bg-[#09090b] text-slate-100 selection:bg-[#9C7844] selection:text-white"
       >
-        {splashScreen}
+        {showSplash && renderSplashScreen(isFadingOut)}
         <div className="min-h-screen flex items-center justify-center bg-[#090D16] text-white p-4">
           <div className="w-full max-w-sm rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-2xl backdrop-blur-xl text-center">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400 mb-4">
@@ -571,13 +591,20 @@ export default function AlbumShare() {
     )
   }
 
+  const firstSelectedPhoto =
+    selectedPhotoIds.length > 0
+      ? photos.find((p) => p && String(p.id) === String(selectedPhotoIds[0])) || highlightPhotos[0]
+      : null
+
   const coverPhotoUrl =
+    firstSelectedPhoto?.url ||
     gallery.coverUrl ||
     (Array.isArray(gallery.photos) && gallery.photos[0]?.url) ||
     ''
 
   return (
     <div
+      key="album-share-root"
       style={{ fontFamily: "'Inter', sans-serif" }}
       className={`min-h-screen transition-colors duration-300 ${
         isDarkMode
@@ -585,7 +612,7 @@ export default function AlbumShare() {
           : 'bg-[#FAF8F5] text-stone-900 selection:bg-[#9C7844] selection:text-white'
       }`}
     >
-      {splashScreen}
+      {showSplash && renderSplashScreen(isFadingOut)}
       {/* Toast */}
       {toastMessage && (
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 rounded-2xl bg-stone-900/95 border border-stone-700 px-5 py-3 text-xs font-medium text-white shadow-2xl backdrop-blur-xl animate-in fade-in">
@@ -915,16 +942,13 @@ export default function AlbumShare() {
                           style={{ aspectRatio: `${ratio}` }}
                           className="group relative w-full overflow-hidden rounded-xs sm:rounded-sm bg-neutral-900 cursor-pointer transition-all duration-300 hover:shadow-2xl active:scale-[0.98]"
                         >
-                          {!loadedPhotos[photo.id] && (
-                            <div className="absolute inset-0 bg-neutral-900 flex items-center justify-center animate-pulse">
-                              <div className="h-5 w-5 rounded-full border border-stone-800 border-t-[#C9A26A]/50 animate-spin" />
-                            </div>
-                          )}
                           <img
-                            src={photo.thumbnailUrl || (photo.fileId ? `/api/drive-image?id=${photo.fileId}&sz=800` : photo.url)}
+                            src={getPhotoThumbnailUrl(photo, 600)}
                             alt={photo.filename}
-                            loading="lazy"
+                            loading="eager"
                             decoding="async"
+                            // @ts-ignore
+                            fetchPriority={originalIndex < 12 ? 'high' : 'auto'}
                             referrerPolicy="no-referrer"
                             onLoad={(e) => {
                               const img = e.currentTarget
@@ -935,25 +959,18 @@ export default function AlbumShare() {
                                   return { ...prev, [photo.id]: r }
                                 })
                               }
-                              setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                             }}
                             onError={(e) => {
-                              setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                               const fileId = photo.fileId || photo.id
                               const target = e.currentTarget
-                              if (!target.dataset.triedProxy && fileId) {
-                                target.dataset.triedProxy = 'true'
-                                target.src = `/api/drive-image?id=${fileId}&sz=800`
-                              } else if (!target.dataset.triedDirect && fileId) {
-                                target.dataset.triedDirect = 'true'
-                                target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`
+                              if (!target.dataset.triedLh3 && fileId) {
+                                target.dataset.triedLh3 = 'true'
+                                target.src = `https://lh3.googleusercontent.com/d/${fileId}`
                               } else if (photo.url && target.src !== photo.url) {
                                 target.src = photo.url
                               }
                             }}
-                            className={`w-full h-full object-cover block transition-all duration-700 ease-out group-hover:scale-105 ${
-                              loadedPhotos[photo.id] ? 'opacity-100' : 'opacity-0'
-                            }`}
+                            className="w-full h-full object-cover block transition-transform duration-500 ease-out group-hover:scale-105"
                           />
                           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                           <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -1028,16 +1045,13 @@ export default function AlbumShare() {
                           style={{ aspectRatio: `${ratio}` }}
                           className="group relative w-full overflow-hidden rounded-xs sm:rounded-sm bg-neutral-900 cursor-pointer transition-all duration-300 hover:shadow-2xl active:scale-[0.98]"
                         >
-                          {!loadedPhotos[photo.id] && (
-                            <div className="absolute inset-0 bg-neutral-900 flex items-center justify-center animate-pulse">
-                              <div className="h-5 w-5 rounded-full border border-stone-800 border-t-[#C9A26A]/50 animate-spin" />
-                            </div>
-                          )}
                           <img
-                            src={photo.thumbnailUrl || (photo.fileId ? `/api/drive-image?id=${photo.fileId}&sz=800` : photo.url)}
+                            src={getPhotoThumbnailUrl(photo, 600)}
                             alt={photo.filename}
-                            loading="lazy"
+                            loading="eager"
                             decoding="async"
+                            // @ts-ignore
+                            fetchPriority={originalIndex < 12 ? 'high' : 'auto'}
                             referrerPolicy="no-referrer"
                             onLoad={(e) => {
                               const img = e.currentTarget
@@ -1048,25 +1062,18 @@ export default function AlbumShare() {
                                   return { ...prev, [photo.id]: r }
                                 })
                               }
-                              setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                             }}
                             onError={(e) => {
-                              setLoadedPhotos((prev) => (prev[photo.id] ? prev : { ...prev, [photo.id]: true }))
                               const fileId = photo.fileId || photo.id
                               const target = e.currentTarget
-                              if (!target.dataset.triedProxy && fileId) {
-                                target.dataset.triedProxy = 'true'
-                                target.src = `/api/drive-image?id=${fileId}&sz=800`
-                              } else if (!target.dataset.triedDirect && fileId) {
-                                target.dataset.triedDirect = 'true'
-                                target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`
+                              if (!target.dataset.triedLh3 && fileId) {
+                                target.dataset.triedLh3 = 'true'
+                                target.src = `https://lh3.googleusercontent.com/d/${fileId}`
                               } else if (photo.url && target.src !== photo.url) {
                                 target.src = photo.url
                               }
                             }}
-                            className={`w-full h-full object-cover block transition-all duration-700 ease-out group-hover:scale-105 ${
-                              loadedPhotos[photo.id] ? 'opacity-100' : 'opacity-0'
-                            }`}
+                            className="w-full h-full object-cover block transition-transform duration-500 ease-out group-hover:scale-105"
                           />
                           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                           <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -1372,18 +1379,15 @@ export default function AlbumShare() {
             onTouchEnd={handleTouchEnd}
           >
             <img
-              src={activePhoto.url || activePhoto.thumbnailUrl || (activePhoto.fileId ? `/api/drive-image?id=${activePhoto.fileId}&sz=1600` : '')}
+              src={activePhoto.url || (activePhoto.fileId ? `https://drive.google.com/thumbnail?id=${activePhoto.fileId}&sz=w1600` : activePhoto.thumbnailUrl || '')}
               alt={activePhoto.filename}
               referrerPolicy="no-referrer"
               onError={(e) => {
                 const fileId = activePhoto.fileId || activePhoto.id
                 const target = e.currentTarget
-                if (!target.dataset.triedProxy && fileId) {
-                  target.dataset.triedProxy = 'true'
-                  target.src = `/api/drive-image?id=${fileId}&sz=1600`
-                } else if (!target.dataset.triedDirect && fileId) {
-                  target.dataset.triedDirect = 'true'
-                  target.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`
+                if (!target.dataset.triedLh3 && fileId) {
+                  target.dataset.triedLh3 = 'true'
+                  target.src = `https://lh3.googleusercontent.com/d/${fileId}`
                 } else if (activePhoto.thumbnailUrl && target.src !== activePhoto.thumbnailUrl) {
                   target.src = activePhoto.thumbnailUrl
                 }

@@ -179,7 +179,7 @@ export interface GalleryData {
   date: string
   maxPhotos: number
   selectedPhotos: number
-  remainingDays: number
+  remainingDays: number 
   status: 'Belum mulai' | 'Sedang memilih' | 'Selesai dipilih'
   isClientViewed: boolean
   viewCount?: number

@@ -125,6 +125,7 @@ export default function Dashboard() {
   const [galleries, setGalleries] = useState<GalleryData[]>(() =>
     getStoredGalleries()
   )
+  const [isSyncing, setIsSyncing] = useState(true)
 
   useEffect(() => {
     setGalleries(getStoredGalleries())
@@ -132,7 +133,8 @@ export default function Dashboard() {
       if (remote && remote.length > 0) {
         setGalleries([...remote])
       }
-    })
+      setIsSyncing(false)
+    }).catch(() => setIsSyncing(false))
     const handleStorage = () => setGalleries(getStoredGalleries())
     window.addEventListener('storage', handleStorage)
     window.addEventListener('galleries-updated', handleStorage)
@@ -1160,7 +1162,7 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
                     <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       TOTAL GALERI
                     </p>
-                    <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
+                    <p className={`text-3xl font-extrabold text-white mt-1.5 leading-none${isSyncing ? ' opacity-30 animate-pulse' : ''}`}>
                       {totalCount}
                     </p>
                     <p className="text-[10px] text-stone-400 mt-1">
@@ -1193,7 +1195,7 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
                     <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       SEDANG MEMILIH
                     </p>
-                    <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
+                    <p className={`text-3xl font-extrabold text-white mt-1.5 leading-none${isSyncing ? ' opacity-30 animate-pulse' : ''}`}>
                       {selectingCount}
                     </p>
                     <p className="text-[10px] text-stone-400 mt-1">
@@ -1231,7 +1233,7 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
                     <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       SELESAI DIPILIH
                     </p>
-                    <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
+                    <p className={`text-3xl font-extrabold text-white mt-1.5 leading-none${isSyncing ? ' opacity-30 animate-pulse' : ''}`}>
                       {finishedCount}
                     </p>
                     <p className="text-[10px] text-stone-400 mt-1">
@@ -1269,7 +1271,7 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
                     <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">
                       BELUM MULAI
                     </p>
-                    <p className="text-3xl font-extrabold text-white mt-1.5 leading-none">
+                    <p className={`text-3xl font-extrabold text-white mt-1.5 leading-none${isSyncing ? ' opacity-30 animate-pulse' : ''}`}>
                       {notStartedCount}
                     </p>
                     <p className="text-[10px] text-stone-400 mt-1">
@@ -1821,7 +1823,29 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
               )}
 
               {/* Gallery Cards Grid */}
-              {filteredGalleries.length === 0 ? (
+              {isSyncing ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="rounded-2xl border border-stone-800 bg-[#141312] p-5 space-y-4 animate-pulse">
+                      <div className="flex gap-3">
+                        <div className="w-16 h-16 rounded-xl bg-stone-800 shrink-0" />
+                        <div className="flex-1 space-y-2 pt-1">
+                          <div className="h-4 bg-stone-800 rounded w-3/4" />
+                          <div className="h-3 bg-stone-800 rounded w-1/2" />
+                          <div className="h-3 bg-stone-800 rounded w-2/3" />
+                        </div>
+                      </div>
+                      <div className="h-2 bg-stone-800 rounded-full" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="h-9 bg-stone-800 rounded-lg" />
+                        <div className="h-9 bg-stone-800 rounded-lg" />
+                        <div className="h-9 bg-stone-800 rounded-lg" />
+                        <div className="h-9 bg-stone-800 rounded-lg" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : filteredGalleries.length === 0 ? (
                 <div className="p-12 text-center rounded-2xl border bg-[#141312] border-stone-800">
                   <div className="h-12 w-12 rounded-full bg-[#C9A26A]/10 text-[#C9A26A] border border-[#C9A26A]/20 mx-auto flex items-center justify-center mb-3">
                     <Search className="h-6 w-6" />

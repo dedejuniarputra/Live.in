@@ -65,7 +65,17 @@ export default function PhotoSelection() {
   const [submitModalTab, setSubmitModalTab] = useState<'photos' | 'summary'>('photos')
   const [isCopied, setIsCopied] = useState(false)
   const [photoRatios, setPhotoRatios] = useState<Record<string, number>>({})
-  const [photoPrintSizes, setPhotoPrintSizes] = useState<Record<string, string>>(() => gallery?.photoPrintSizes || {})
+  const [photoPrintSizes, setPhotoPrintSizes] = useState<Record<string, string>>(() => {
+    try {
+      const localSlug = slug ? decodeURIComponent(slug).trim() : ''
+      const cached = localSlug ? localStorage.getItem(`livein_print_sizes_${localSlug}`) : null
+      if (cached) {
+        const parsed = JSON.parse(cached)
+        if (parsed && typeof parsed === 'object') return parsed
+      }
+    } catch {}
+    return gallery?.photoPrintSizes || {}
+  })
 
   const availablePrintSizes: string[] =
     Array.isArray(gallery?.printSizes) && gallery.printSizes.length > 0
@@ -74,11 +84,23 @@ export default function PhotoSelection() {
 
   const setPhotoPrintSize = (photoId: string, size: string) => {
     setPhotoPrintSizes((prev) => {
-      const next = { ...prev, [photoId]: size }
+      const next = { ...prev }
+      if (size) {
+        next[photoId] = size
+      } else {
+        delete next[photoId]
+      }
       if (gallery) {
-        const updated = { ...gallery, photoPrintSizes: next }
+        const updated: GalleryData = { ...gallery, photoPrintSizes: next }
         setGallery(updated)
         saveOrUpdateGallery(updated)
+        try {
+          const cacheKey = `livein_print_sizes_${gallery.id || gallery.slug}`
+          localStorage.setItem(cacheKey, JSON.stringify(next))
+          if (gallery.slug) {
+            localStorage.setItem(`livein_print_sizes_${gallery.slug}`, JSON.stringify(next))
+          }
+        } catch {}
       }
       return next
     })
@@ -159,6 +181,25 @@ export default function PhotoSelection() {
         } else {
           document.title = 'Live.IN | Seleksi Foto'
         }
+
+        // Pulihkan & sinkronkan ukuran cetak foto dari Firestore / cache lokal
+        let restoredSizes: Record<string, string> = { ...(data?.photoPrintSizes || {}) }
+        try {
+          const cacheKey = `livein_print_sizes_${data.id || data.slug}`
+          const cacheSlugKey = data.slug ? `livein_print_sizes_${data.slug}` : ''
+          const cached = localStorage.getItem(cacheKey) || (cacheSlugKey ? localStorage.getItem(cacheSlugKey) : null)
+          if (cached) {
+            const parsed = JSON.parse(cached)
+            if (parsed && typeof parsed === 'object') {
+              restoredSizes = { ...parsed, ...restoredSizes }
+            }
+          }
+        } catch {}
+
+        if (Object.keys(restoredSizes).length > 0) {
+          setPhotoPrintSizes(restoredSizes)
+        }
+
         const sessionKey = `livein_selection_view_${data.id}`
         if (!sessionStorage.getItem(sessionKey)) {
           const updated = incrementGalleryViewCount(data.slug || data.id)
@@ -346,6 +387,13 @@ export default function PhotoSelection() {
     if (isAlreadySelected && nextPhotoPrintSizes[photoId]) {
       delete nextPhotoPrintSizes[photoId]
       setPhotoPrintSizes(nextPhotoPrintSizes)
+      try {
+        const cacheKey = `livein_print_sizes_${gallery.id || gallery.slug}`
+        localStorage.setItem(cacheKey, JSON.stringify(nextPhotoPrintSizes))
+        if (gallery.slug) {
+          localStorage.setItem(`livein_print_sizes_${gallery.slug}`, JSON.stringify(nextPhotoPrintSizes))
+        }
+      } catch {}
     }
 
     const updatedPhotos = (gallery.photos || []).map((p) => ({
@@ -372,7 +420,7 @@ export default function PhotoSelection() {
       selectedPhotoIds: newSelectedIds,
       selectedPhotos: newSelectedIds.length,
       status: newStatus,
-      photoPrintSizes: isAlreadySelected ? nextPhotoPrintSizes : gallery.photoPrintSizes,
+      photoPrintSizes: isAlreadySelected ? nextPhotoPrintSizes : photoPrintSizes,
     }
 
     setGallery(updatedGallery)
@@ -475,6 +523,23 @@ Terima kasih kak :)`
     const rawPhone = import.meta.env.VITE_ADMIN_WHATSAPP || '6289601350794'
     const cleanPhone = String(rawPhone).replace(/\D/g, '')
     const targetPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone || '6289601350794'
+
+    // Simpan pilihan ukuran cetak dan tandai status galeri telah selesai dipilih
+    const updatedGallery: GalleryData = {
+      ...gallery,
+      status: 'Selesai dipilih',
+      photoPrintSizes: { ...photoPrintSizes },
+    }
+    setGallery(updatedGallery)
+    saveOrUpdateGallery(updatedGallery)
+    try {
+      const cacheKey = `livein_print_sizes_${gallery.id || gallery.slug}`
+      localStorage.setItem(cacheKey, JSON.stringify(photoPrintSizes))
+      if (gallery.slug) {
+        localStorage.setItem(`livein_print_sizes_${gallery.slug}`, JSON.stringify(photoPrintSizes))
+      }
+    } catch {}
+
     window.open(
       `https://api.whatsapp.com/send?phone=${targetPhone}&text=${encodeURIComponent(waMsg)}`,
       '_blank'

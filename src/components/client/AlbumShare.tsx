@@ -10,7 +10,6 @@ import {
   ChevronRight,
   ChevronDown,
   Star,
-  LayoutGrid,
   Link as LinkIcon,
   QrCode,
   Share2,
@@ -24,6 +23,8 @@ import {
   fetchGalleryBySlug,
   incrementGalleryViewCount,
   getPhotoThumbnailUrl,
+  handlePhotoImgError,
+  preloadInitialGalleryPhotos,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -53,23 +54,56 @@ export default function AlbumShare() {
   const [showSplash, setShowSplash] = useState(true)
   const [isFadingOut, setIsFadingOut] = useState(false)
 
+  // Splash screen & Preload foto agar foto siap tampil sebelum klien melihat album
   useEffect(() => {
-    if (gallery) {
-      const fadeTimer = setTimeout(() => {
+    if (!gallery || !gallery.photos || gallery.photos.length === 0) {
+      if (!isFetching && !gallery) {
         setIsFadingOut(true)
-      }, 700)
-      const removeTimer = setTimeout(() => {
         setShowSplash(false)
-      }, 1400)
-      return () => {
-        clearTimeout(fadeTimer)
-        clearTimeout(removeTimer)
       }
-    } else if (!isFetching && !gallery) {
-      setIsFadingOut(true)
-      setShowSplash(false)
+      return
     }
-  }, [gallery, isFetching])
+
+    let isCancelled = false
+    const startTime = Date.now()
+    const MIN_SPLASH_TIME = 900 // Minimal durasi splash agar transisi visual terasa nyaman
+
+    preloadInitialGalleryPhotos(gallery.photos, 16, 4000).then((res) => {
+      if (isCancelled) return
+      if (res.photoRatios && Object.keys(res.photoRatios).length > 0) {
+        setPhotoRatios((prev) => ({ ...prev, ...res.photoRatios }))
+      }
+
+      const elapsed = Date.now() - startTime
+      const remaining = Math.max(0, MIN_SPLASH_TIME - elapsed)
+
+      setTimeout(() => {
+        if (isCancelled) return
+        setIsFadingOut(true)
+        setTimeout(() => {
+          if (isCancelled) return
+          setShowSplash(false)
+        }, 700)
+      }, remaining)
+
+      // Background preload untuk batch foto berikutnya (16 - 64)
+      setTimeout(() => {
+        if (isCancelled) return
+        gallery.photos.slice(16, 64).forEach((p) => {
+          const src = getPhotoThumbnailUrl(p, 600)
+          if (src) {
+            const img = new Image()
+            img.referrerPolicy = 'no-referrer'
+            img.src = src
+          }
+        })
+      }, remaining + 800)
+    })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [gallery?.id, isFetching])
 
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [activePhoto, setActivePhoto] = useState<GalleryPhoto | null>(null)
@@ -111,6 +145,14 @@ export default function AlbumShare() {
   // QR Modal & Download Album Modal
   const [isQrModalOpen, setIsQrModalOpen] = useState(false)
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false)
+
+  // Kunci scroll halaman belakang saat modal/lightbox terbuka
+  useEffect(() => {
+    if (!activePhoto && !isQrModalOpen && !isDownloadModalOpen) return
+    const orig = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = orig }
+  }, [activePhoto, isQrModalOpen, isDownloadModalOpen])
 
   // Album share is permanently styled in modern dark mode
   const isDarkMode = true
@@ -499,8 +541,11 @@ export default function AlbumShare() {
           <div className="h-8 w-8 rounded-full border-2 border-stone-800 border-t-[#C9A26A] animate-spin" />
         </div>
 
-        <p className="text-xs sm:text-[13px] text-stone-400 tracking-wide">
-          Memuat foto...
+        <p className="text-xs sm:text-[13px] text-stone-200 font-medium tracking-wide">
+          Menyiapkan galeri foto...
+        </p>
+        <p className="text-[11px] text-stone-500 tracking-wide mt-1">
+          Memastikan semua foto siap ditampilkan
         </p>
       </div>
     </div>
@@ -643,6 +688,12 @@ export default function AlbumShare() {
           <img
             src={coverPhotoUrl}
             alt={gallery.clientName}
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              if (gallery.photos && gallery.photos[0]) {
+                handlePhotoImgError(e, gallery.photos[0], 1600)
+              }
+            }}
             className="absolute inset-0 w-full h-full object-cover object-center brightness-90 transition-transform duration-1000 ease-out hover:scale-105"
           />
         )}
@@ -906,22 +957,12 @@ export default function AlbumShare() {
 
                 {/* Subtitle Description */}
                 <p
-                  className={`text-xs sm:text-sm italic leading-relaxed mb-6 sm:mb-8 ${
+                  className={`text-xs sm:text-sm italic leading-relaxed ${
                     isDarkMode ? 'text-slate-400' : 'text-stone-600'
                   }`}
                 >
                   Highlight adalah kumpulan foto paling berkesan dari album ini — cerita singkat yang dilihat lebih dulu sebelum menjelajah semua foto.
                 </p>
-
-                {/* LIHAT SEMUA FOTO Action Button */}
-                <button
-                  type="button"
-                  onClick={() => setMainTab('semua')}
-                  className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-[#E8C28A] px-5 py-2.5 text-xs font-semibold tracking-wider uppercase transition-all cursor-pointer shadow-md active:scale-95"
-                >
-                  <LayoutGrid className="h-3.5 w-3.5" />
-                  <span>LIHAT SEMUA FOTO</span>
-                </button>
               </div>
             ) : (
               /* Kolase Foto Highlight (Potrait & Landscape Bersatu Harmonis) */
@@ -945,7 +986,7 @@ export default function AlbumShare() {
                           <img
                             src={getPhotoThumbnailUrl(photo, 600)}
                             alt={photo.filename}
-                            loading="eager"
+                            loading={originalIndex < 12 ? 'eager' : 'lazy'}
                             decoding="async"
                             // @ts-ignore
                             fetchPriority={originalIndex < 12 ? 'high' : 'auto'}
@@ -960,16 +1001,7 @@ export default function AlbumShare() {
                                 })
                               }
                             }}
-                            onError={(e) => {
-                              const fileId = photo.fileId || photo.id
-                              const target = e.currentTarget
-                              if (!target.dataset.triedLh3 && fileId) {
-                                target.dataset.triedLh3 = 'true'
-                                target.src = `https://lh3.googleusercontent.com/d/${fileId}`
-                              } else if (photo.url && target.src !== photo.url) {
-                                target.src = photo.url
-                              }
-                            }}
+                            onError={(e) => handlePhotoImgError(e, photo, 800)}
                             className="w-full h-full object-cover block transition-transform duration-500 ease-out group-hover:scale-105"
                           />
                           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
@@ -1048,7 +1080,7 @@ export default function AlbumShare() {
                           <img
                             src={getPhotoThumbnailUrl(photo, 600)}
                             alt={photo.filename}
-                            loading="eager"
+                            loading={originalIndex < 12 ? 'eager' : 'lazy'}
                             decoding="async"
                             // @ts-ignore
                             fetchPriority={originalIndex < 12 ? 'high' : 'auto'}
@@ -1063,16 +1095,7 @@ export default function AlbumShare() {
                                 })
                               }
                             }}
-                            onError={(e) => {
-                              const fileId = photo.fileId || photo.id
-                              const target = e.currentTarget
-                              if (!target.dataset.triedLh3 && fileId) {
-                                target.dataset.triedLh3 = 'true'
-                                target.src = `https://lh3.googleusercontent.com/d/${fileId}`
-                              } else if (photo.url && target.src !== photo.url) {
-                                target.src = photo.url
-                              }
-                            }}
+                            onError={(e) => handlePhotoImgError(e, photo, 800)}
                             className="w-full h-full object-cover block transition-transform duration-500 ease-out group-hover:scale-105"
                           />
                           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
@@ -1382,16 +1405,7 @@ export default function AlbumShare() {
               src={activePhoto.url || (activePhoto.fileId ? `https://drive.google.com/thumbnail?id=${activePhoto.fileId}&sz=w1600` : activePhoto.thumbnailUrl || '')}
               alt={activePhoto.filename}
               referrerPolicy="no-referrer"
-              onError={(e) => {
-                const fileId = activePhoto.fileId || activePhoto.id
-                const target = e.currentTarget
-                if (!target.dataset.triedLh3 && fileId) {
-                  target.dataset.triedLh3 = 'true'
-                  target.src = `https://lh3.googleusercontent.com/d/${fileId}`
-                } else if (activePhoto.thumbnailUrl && target.src !== activePhoto.thumbnailUrl) {
-                  target.src = activePhoto.thumbnailUrl
-                }
-              }}
+              onError={(e) => handlePhotoImgError(e, activePhoto, 1600)}
               className="max-h-[76dvh] sm:max-h-[88dvh] max-w-[96vw] sm:max-w-[94vw] w-auto h-auto object-contain rounded-lg shadow-2xl transition-transform duration-200"
             />
           </div>

@@ -186,7 +186,9 @@ export async function scanGoogleDriveFolder(
                     fileId: file.id,
                     filename: file.name || `FOTO_${String(allPhotos.length + 1).padStart(4, '0')}.JPG`,
                     url: getDriveDirectImageUrl(file.id),
-                    thumbnailUrl: getDriveThumbnailUrl(file.id, 800),
+                    thumbnailUrl: file.thumbnailLink
+                      ? file.thumbnailLink.replace(/=s\d+/, '=s800')
+                      : getDriveThumbnailUrl(file.id, 800),
                     mimeType: file.mimeType,
                     size: file.size ? Number(file.size) : undefined,
                     aspect,

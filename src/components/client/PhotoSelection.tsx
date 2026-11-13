@@ -3,6 +3,8 @@ import { useParams, useLocation } from 'react-router-dom'
 import {
   LayoutGrid,
   Check,
+  CheckCircle2,
+  Copy,
   X,
   ChevronLeft,
   ChevronRight,
@@ -15,7 +17,6 @@ import {
   Columns2,
   ArrowUp,
   Search,
-  ListFilter,
 } from 'lucide-react'
 import {
   findGalleryBySlug,
@@ -23,6 +24,8 @@ import {
   saveOrUpdateGallery,
   incrementGalleryViewCount,
   getPhotoThumbnailUrl,
+  handlePhotoImgError,
+  preloadInitialGalleryPhotos,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -52,15 +55,34 @@ export default function PhotoSelection() {
   const [subCategory, setSubCategory] = useState<string>('semua')
 
   // Sorting
-  const [isSortAsc, setIsSortAsc] = useState(true)
+  const isSortAsc = true
 
   // Lightbox & Selection
   const [activePhoto, setActivePhoto] = useState<GalleryPhoto | null>(null)
   const [activePhotoIndex, setActivePhotoIndex] = useState<number>(0)
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false)
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false)
+  const [submitModalTab, setSubmitModalTab] = useState<'photos' | 'summary'>('photos')
   const [isCopied, setIsCopied] = useState(false)
   const [photoRatios, setPhotoRatios] = useState<Record<string, number>>({})
+  const [photoPrintSizes, setPhotoPrintSizes] = useState<Record<string, string>>(() => gallery?.photoPrintSizes || {})
+
+  const availablePrintSizes: string[] =
+    Array.isArray(gallery?.printSizes) && gallery.printSizes.length > 0
+      ? gallery.printSizes
+      : []
+
+  const setPhotoPrintSize = (photoId: string, size: string) => {
+    setPhotoPrintSizes((prev) => {
+      const next = { ...prev, [photoId]: size }
+      if (gallery) {
+        const updated = { ...gallery, photoPrintSizes: next }
+        setGallery(updated)
+        saveOrUpdateGallery(updated)
+      }
+      return next
+    })
+  }
 
   const [columnCount, setColumnCount] = useState(() => {
     if (typeof window === 'undefined') return 6
@@ -98,10 +120,23 @@ export default function PhotoSelection() {
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
+  // Kunci scroll halaman belakang saat modal konfirmasi atau lightbox terbuka
+  useEffect(() => {
+    if (isSubmitModalOpen || Boolean(activePhoto)) {
+      const originalOverflow = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      return () => {
+        document.body.style.overflow = originalOverflow
+      }
+    }
+  }, [isSubmitModalOpen, activePhoto])
+
   // Client gallery is permanently styled in modern dark mode (#0c0d0e)
   const isDarkMode = true
 
   const [isFetching, setIsFetching] = useState(!gallery)
+  const [showSplash, setShowSplash] = useState(true)
+  const [isFadingOut, setIsFadingOut] = useState(false)
 
   useEffect(() => {
     let isCancelled = false
@@ -180,32 +215,56 @@ export default function PhotoSelection() {
   const selectedCount = selectedPhotoIds.length
   const maxPhotos = gallery?.maxPhotos || 60
 
-  // Preload batch foto di background agar foto langsung siap tampil tanpa menunggu
+  // Splash screen & Preload foto agar foto siap tampil sebelum klien melihat galeri
   useEffect(() => {
-    if (!photos || photos.length === 0) return
-
-    const firstBatch = photos.slice(0, 24)
-    firstBatch.forEach((p) => {
-      const src = getPhotoThumbnailUrl(p, 600)
-      if (src) {
-        const img = new Image()
-        img.src = src
+    if (!gallery || !photos || photos.length === 0) {
+      if (!isFetching && !gallery) {
+        setIsFadingOut(true)
+        setShowSplash(false)
       }
+      return
+    }
+
+    let isCancelled = false
+    const startTime = Date.now()
+    const MIN_SPLASH_TIME = 900 // Minimal durasi splash agar transisi visual terasa nyaman
+
+    preloadInitialGalleryPhotos(photos, 16, 4000).then((res) => {
+      if (isCancelled) return
+      if (res.photoRatios && Object.keys(res.photoRatios).length > 0) {
+        setPhotoRatios((prev) => ({ ...prev, ...res.photoRatios }))
+      }
+
+      const elapsed = Date.now() - startTime
+      const remaining = Math.max(0, MIN_SPLASH_TIME - elapsed)
+
+      setTimeout(() => {
+        if (isCancelled) return
+        setIsFadingOut(true)
+        setTimeout(() => {
+          if (isCancelled) return
+          setShowSplash(false)
+        }, 700)
+      }, remaining)
+
+      // Lanjutkan preload batch foto berikutnya (16 - 64) di background setelah viewport pertama siap
+      setTimeout(() => {
+        if (isCancelled) return
+        photos.slice(16, 64).forEach((p) => {
+          const src = getPhotoThumbnailUrl(p, 600)
+          if (src) {
+            const img = new Image()
+            img.referrerPolicy = 'no-referrer'
+            img.src = src
+          }
+        })
+      }, remaining + 800)
     })
 
-    const timer = setTimeout(() => {
-      const nextBatch = photos.slice(24, 72)
-      nextBatch.forEach((p) => {
-        const src = getPhotoThumbnailUrl(p, 600)
-        if (src) {
-          const img = new Image()
-          img.src = src
-        }
-      })
-    }, 400)
-
-    return () => clearTimeout(timer)
-  }, [photos])
+    return () => {
+      isCancelled = true
+    }
+  }, [gallery?.id, isFetching])
 
   // Highlights are exclusively the photos chosen by the client
   const highlightPhotos = photos.filter(
@@ -283,6 +342,12 @@ export default function PhotoSelection() {
       ? currentIds.filter((id) => id !== photoId)
       : [...currentIds, photoId]
 
+    const nextPhotoPrintSizes = { ...photoPrintSizes }
+    if (isAlreadySelected && nextPhotoPrintSizes[photoId]) {
+      delete nextPhotoPrintSizes[photoId]
+      setPhotoPrintSizes(nextPhotoPrintSizes)
+    }
+
     const updatedPhotos = (gallery.photos || []).map((p) => ({
       ...p,
       isHighlight: newSelectedIds.includes(String(p.id)),
@@ -307,6 +372,7 @@ export default function PhotoSelection() {
       selectedPhotoIds: newSelectedIds,
       selectedPhotos: newSelectedIds.length,
       status: newStatus,
+      photoPrintSizes: isAlreadySelected ? nextPhotoPrintSizes : gallery.photoPrintSizes,
     }
 
     setGallery(updatedGallery)
@@ -351,8 +417,13 @@ export default function PhotoSelection() {
   const handleCopyList = () => {
     if (!gallery) return
     const selectedPhotosList = photos.filter((p) => p && selectedPhotoIds.includes(p.id))
+    const hasPrintSizes = availablePrintSizes.length > 0
     const filenamesText = selectedPhotosList
-      .map((p) => `${p.filename || `Foto-${p.id}`},`)
+      .map((p) => {
+        const name = p.filename || `Foto-${p.id}`
+        const size = hasPrintSizes ? photoPrintSizes[p.id] : undefined
+        return size ? `${name} — cetak ${size},` : `${name},`
+      })
       .join('\n')
 
     const clientName = (gallery.clientName || '').trim() || 'Wisuda Putra 22 Agustus 2026'
@@ -384,8 +455,13 @@ Terima kasih kak :)`
     showToast('Membuka WhatsApp...')
 
     const selectedPhotosList = photos.filter((p) => p && selectedPhotoIds.includes(p.id))
+    const hasPrintSizes = availablePrintSizes.length > 0
     const filenamesText = selectedPhotosList
-      .map((p) => `${p.filename || `Foto-${p.id}`},`)
+      .map((p) => {
+        const name = p.filename || `Foto-${p.id}`
+        const size = hasPrintSizes ? photoPrintSizes[p.id] : undefined
+        return size ? `${name} — cetak ${size},` : `${name},`
+      })
       .join('\n')
 
     const clientName = (gallery.clientName || '').trim() || 'Wisuda Putra 22 Agustus 2026'
@@ -527,15 +603,83 @@ Terima kasih kak :)`
     }
   }
 
-  if (isFetching && !gallery) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#0c0d0e] text-white">
-        <div className="h-7 w-7 rounded-full border-2 border-stone-800 border-t-[#C9A26A] animate-spin" />
-      </div>
-    )
+  const effectiveSlug =
+    slug ||
+    (typeof window !== 'undefined'
+      ? window.location.pathname.split('/').filter(Boolean).pop() || ''
+      : '')
+
+  const cleanSlugToTitle = (rawSlug?: string): string => {
+    if (!rawSlug) return 'Galeri Foto'
+    try {
+      let s = decodeURIComponent(rawSlug).trim()
+      s = s.split('?')[0].split('#')[0]
+      const parts = s.split('/').filter(Boolean)
+      if (parts.length > 0) {
+        s = parts[parts.length - 1]
+      }
+      s = s.replace(/^(album|livesotory-co|livesostory-co|gallery|select|pilihin)[-_]/i, '')
+      s = s.replace(/-3$/i, '')
+      s = s.replace(/(\b(?:19|20)\d{2})[-_]\d{4,6}$/i, '$1')
+      s = s.replace(/[-_](?!(?:19|20)\d{2})\d{4,6}$/i, '')
+      s = s.replace(/[-_]+/g, ' ').trim()
+      if (!s) return 'Galeri Foto'
+      return s
+        .split(' ')
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ')
+    } catch {
+      return 'Galeri Foto'
+    }
   }
 
+  const albumName =
+    gallery?.clientName?.trim() || cleanSlugToTitle(effectiveSlug)
+
+  const renderSplashScreen = (fadingOut = false) => (
+    <div
+      key="splash-screen-overlay"
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#09090b] text-white transition-opacity duration-700 select-none ${
+        fadingOut ? 'opacity-0 pointer-events-none' : 'opacity-100'
+      }`}
+      style={{ fontFamily: "'Inter', sans-serif" }}
+    >
+      <div className="flex flex-col items-center text-center px-6 max-w-sm mx-auto">
+        <div className="flex flex-col items-center">
+          <span className="text-[11px] font-semibold tracking-[0.25em] text-stone-500 uppercase">
+            PHOTO BY
+          </span>
+          <h2 className="text-sm sm:text-base font-extrabold tracking-[0.2em] text-stone-100 uppercase mt-1">
+            LIVESOSTORY.CO
+          </h2>
+          <p className="text-xs text-stone-400 tracking-wide mt-2.5">
+            album by <span className="text-[#C9A26A] font-medium">{albumName}</span>
+          </p>
+        </div>
+
+        <div className="my-7">
+          <div className="h-8 w-8 rounded-full border-2 border-stone-800 border-t-[#C9A26A] animate-spin" />
+        </div>
+
+        <p className="text-xs sm:text-[13px] text-stone-200 font-medium tracking-wide">
+          Menyiapkan galeri foto...
+        </p>
+        <p className="text-[11px] text-stone-500 tracking-wide mt-1">
+          Memastikan semua foto siap ditampilkan
+        </p>
+      </div>
+    </div>
+  )
+
   if (!gallery) {
+    if (isFetching) {
+      return (
+        <div className="min-h-screen bg-[#09090b] text-white">
+          {renderSplashScreen(false)}
+        </div>
+      )
+    }
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#090D16] text-white p-6 text-center select-none">
         <h2 className="text-base sm:text-lg font-semibold text-white tracking-wide">Galeri Tidak Ditemukan</h2>
@@ -554,6 +698,7 @@ Terima kasih kak :)`
           : 'bg-[#FAF8F5] text-stone-900 selection:bg-[#ba965c] selection:text-white'
       }`}
     >
+      {showSplash && renderSplashScreen(isFadingOut)}
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full bg-stone-900/90 text-white border border-stone-700/80 px-4 py-2 text-xs font-medium shadow-2xl backdrop-blur-md animate-in fade-in">
@@ -677,18 +822,6 @@ Terima kasih kak :)`
                 <span>Swipe</span>
               </button>
             </div>
-
-            {/* Right Tools: Sort */}
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setIsSortAsc((prev) => !prev)}
-                className="h-7 w-7 rounded-full border border-white/15 flex items-center justify-center text-[#9e9e9e] hover:text-white transition-colors cursor-pointer"
-                title={isSortAsc ? 'Urutan: A-Z' : 'Urutan: Z-A'}
-              >
-                <ListFilter className="h-3.5 w-3.5" />
-              </button>
-            </div>
           </div>
 
           {/* Navigation Bar 2: Folder Category Pills (Menyesuaikan nama folder saat Google Drive discan) */}
@@ -777,7 +910,7 @@ Terima kasih kak :)`
                       <img
                         src={initialSrc}
                         alt={photo.filename}
-                        loading="eager"
+                        loading={originalIndex < 12 ? 'eager' : 'lazy'}
                         decoding="async"
                         // @ts-ignore
                         fetchPriority={originalIndex < 12 ? 'high' : 'auto'}
@@ -792,16 +925,7 @@ Terima kasih kak :)`
                             })
                           }
                         }}
-                        onError={(e) => {
-                          const fileId = photo.fileId || photo.id
-                          const target = e.currentTarget
-                          if (!target.dataset.triedLh3 && fileId) {
-                            target.dataset.triedLh3 = 'true'
-                            target.src = `https://lh3.googleusercontent.com/d/${fileId}`
-                          } else if (photo.url && target.src !== photo.url) {
-                            target.src = photo.url
-                          }
-                        }}
+                        onError={(e) => handlePhotoImgError(e, photo, 800)}
                         className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                       />
 
@@ -936,6 +1060,7 @@ Terima kasih kak :)`
                 showToast(`Pilih ${sisa} foto lagi untuk mencapai batas ${maxPhotos} foto (${selectedCount}/${maxPhotos})`)
                 return
               }
+              setSubmitModalTab('photos')
               setIsSubmitModalOpen(true)
               if (gallery && gallery.status !== 'Selesai dipilih') {
                 const updated = { ...gallery, status: 'Selesai dipilih' as const }
@@ -1077,6 +1202,8 @@ Terima kasih kak :)`
                   <img
                     src={activePhoto.url || (activePhoto.fileId ? `https://drive.google.com/thumbnail?id=${activePhoto.fileId}&sz=w1200` : activePhoto.thumbnailUrl || '')}
                     alt={activePhoto.filename}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => handlePhotoImgError(e, activePhoto, 1200)}
                     className="max-h-[60vh] sm:max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-xl"
                   />
                   <div className="mt-2.5 flex items-center gap-2">
@@ -1103,6 +1230,8 @@ Terima kasih kak :)`
                   <img
                     src={comparePhoto.url || (comparePhoto.fileId ? `https://drive.google.com/thumbnail?id=${comparePhoto.fileId}&sz=w1200` : comparePhoto.thumbnailUrl || '')}
                     alt={comparePhoto.filename}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => handlePhotoImgError(e, comparePhoto, 1200)}
                     className="max-h-[60vh] sm:max-h-[66vh] w-auto max-w-full object-contain rounded-lg shadow-xl"
                   />
                   <div className="mt-2.5 flex items-center gap-2">
@@ -1129,16 +1258,7 @@ Terima kasih kak :)`
                 src={activePhoto.url || (activePhoto.fileId ? `https://drive.google.com/thumbnail?id=${activePhoto.fileId}&sz=w1600` : activePhoto.thumbnailUrl || '')}
                 alt={activePhoto.filename}
                 referrerPolicy="no-referrer"
-                onError={(e) => {
-                  const fileId = activePhoto.fileId || activePhoto.id
-                  const target = e.currentTarget
-                  if (!target.dataset.triedLh3 && fileId) {
-                    target.dataset.triedLh3 = 'true'
-                    target.src = `https://lh3.googleusercontent.com/d/${fileId}`
-                  } else if (activePhoto.thumbnailUrl && target.src !== activePhoto.thumbnailUrl) {
-                    target.src = activePhoto.thumbnailUrl
-                  }
-                }}
+                onError={(e) => handlePhotoImgError(e, activePhoto, 1600)}
                 className="max-h-[76dvh] sm:max-h-[88dvh] max-w-[96vw] sm:max-w-[94vw] w-auto h-auto object-contain rounded-lg shadow-2xl transition-transform duration-200"
               />
             )}
@@ -1170,6 +1290,33 @@ Terima kasih kak :)`
                       : 'Pilih Foto Ini'}
                   </span>
                 </button>
+
+                {selectedPhotoIds.includes(activePhoto.id) && availablePrintSizes.length > 0 && (
+                  <select
+                    value={photoPrintSizes[activePhoto.id] || ''}
+                    onChange={(e) => setPhotoPrintSize(activePhoto.id, e.target.value)}
+                    className="bg-black/80 hover:bg-black text-[#C9A26A] border border-[#C9A26A]/50 rounded-full text-xs font-bold px-3 py-2 shadow-lg cursor-pointer focus:outline-none backdrop-blur-md"
+                    title="Pilih ukuran cetak"
+                  >
+                    <option value="" className="bg-[#181716] text-stone-400">File Digital (Tanpa Cetak)</option>
+                    {availablePrintSizes.map((s: string) => {
+                      const quota = gallery?.printSizeQuotas?.[s] ?? 1
+                      const used = selectedPhotoIds.filter((id) => photoPrintSizes[id] === s).length
+                      const isSelected = photoPrintSizes[activePhoto.id] === s
+                      const isFull = !isSelected && used >= quota
+                      return (
+                        <option
+                          key={s}
+                          value={s}
+                          disabled={isFull}
+                          className={isFull ? 'bg-[#181716] text-stone-500' : 'bg-[#181716] text-white'}
+                        >
+                          Cetak {s} {isFull ? '- Kuota Penuh' : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                )}
               </div>
             )}
             <p className="text-[11px] sm:text-xs text-white/60 tracking-wide select-none hidden sm:block">
@@ -1182,113 +1329,425 @@ Terima kasih kak :)`
         </div>
       )}
 
-      {/* Confirmation Modal to Send Selected Photos */}
-      {isSubmitModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in"
-          onClick={() => setIsSubmitModalOpen(false)}
-        >
+      {/* Confirmation Modal to Send Selected Photos (Desain Baru: Grid Foto Terpilih + Ukuran Cetak) */}
+      {isSubmitModalOpen && (() => {
+        const selectedPhotos = photos.filter((p) => p && selectedPhotoIds.includes(p.id))
+        const printSizeQuotas: Record<string, number> = gallery?.printSizeQuotas || {}
+        const hasPrintSizes = availablePrintSizes.length > 0
+
+        // Menghitung berapa foto yang menggunakan ukuran tertentu
+        const getUsageCountForSize = (size: string) => {
+          return selectedPhotos.filter((p) => photoPrintSizes[p.id] === size).length
+        }
+
+        // Total kuota cetak yang ditentukan admin & total yang sudah dialokasikan
+        const totalQuotaNeeded = hasPrintSizes
+          ? availablePrintSizes.reduce((sum, size) => sum + (printSizeQuotas[size] ?? 1), 0)
+          : 0
+        const totalQuotaUsed = hasPrintSizes
+          ? availablePrintSizes.reduce((sum, size) => sum + getUsageCountForSize(size), 0)
+          : 0
+        const remainingQuota = Math.max(0, totalQuotaNeeded - totalQuotaUsed)
+
+        // Validasi: seluruh kuota untuk setiap ukuran yang aktif harus terpenuhi
+        const isAllPrintSizesChosen =
+          !hasPrintSizes ||
+          availablePrintSizes.every((size) => {
+            const quota = printSizeQuotas[size] ?? 1
+            const used = getUsageCountForSize(size)
+            return used === quota
+          })
+
+        return (
           <div
-            onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl p-6 sm:p-7 shadow-2xl border transition-all ${
-              isDarkMode ? 'border-slate-800 bg-[#0c121e] text-slate-100' : 'border-stone-200 bg-white text-stone-900'
-            }`}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-2 sm:p-4 md:p-6 overflow-y-auto animate-in fade-in"
+            onClick={() => setIsSubmitModalOpen(false)}
           >
-            {/* Header: Send Icon & Title */}
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#9C7844]/15 text-[#C9A26A]">
-                <Send className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold">Kirim Pilihan Foto</h3>
-                <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-stone-500'}`}>
-                  Konfirmasi foto pilihan ke Livesostory.co
-                </p>
-              </div>
-            </div>
-
-            {/* Info Summary Card */}
             <div
-              className={`rounded-2xl p-4 space-y-2 text-xs mb-3.5 border ${
-                isDarkMode ? 'border-slate-800 bg-slate-950/60' : 'border-stone-200 bg-[#FAF8F5]'
-              }`}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-6xl max-h-[96dvh] h-[96dvh] sm:max-h-[92dvh] sm:h-[92dvh] rounded-2xl sm:rounded-3xl border border-stone-800 bg-[#121110] text-stone-100 shadow-2xl flex flex-col overflow-hidden my-auto"
             >
-              <div className="flex justify-between">
-                <span className={isDarkMode ? 'text-slate-400' : 'text-stone-500'}>Klien:</span>
-                <span className="font-semibold">{gallery.clientName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className={isDarkMode ? 'text-slate-400' : 'text-stone-500'}>Foto Terpilih:</span>
-                <span className="font-bold text-[#E8C28A]">
-                  {selectedCount} dari {maxPhotos} foto
-                </span>
-              </div>
-            </div>
+              {/* Modal Header */}
+              <div className="border-b border-stone-800/80 px-3.5 sm:px-6 py-3 sm:py-4 flex items-center justify-between shrink-0 bg-[#181716]">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[#C9A26A]/15 border border-[#C9A26A]/30 text-[#C9A26A] flex items-center justify-center font-bold shrink-0">
+                    <Send className="h-4 w-4 sm:h-5 sm:w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-xs sm:text-base font-bold text-white truncate max-w-[200px] sm:max-w-none">
+                        Konfirmasi Pilihan Foto — {gallery?.clientName}
+                      </h3>
+                      <span className="text-[11px] sm:text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 sm:px-2.5 py-0.5 rounded-full font-semibold shrink-0">
+                        {selectedCount} dari {maxPhotos} Foto
+                      </span>
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-stone-400 mt-0.5 line-clamp-1 sm:line-clamp-none">
+                      Periksa dan konfirmasi foto pilihan Anda sebelum dikirim.
+                    </p>
+                  </div>
+                </div>
 
-            {/* Green Notification Alert */}
-            <div className="flex items-center gap-2 rounded-xl bg-[#0f2419] border border-[#1b4e31] px-3.5 py-2.5 text-xs font-medium text-[#4ade80] mb-3.5">
-              <span className="font-bold">✓</span>
-              <span>
-                {selectedCount} foto tersimpan. Fotografermu sudah bisa melihatnya.
-              </span>
-            </div>
-
-            {/* Scrollable Filename List */}
-            <div className="space-y-1.5 mb-5">
-              <div className="flex items-center justify-between text-xs">
-                <span className={`font-medium ${isDarkMode ? 'text-slate-300' : 'text-stone-600'}`}>
-                  Daftar foto terpilih ({selectedCount}):
-                </span>
                 <button
                   type="button"
-                  onClick={handleCopyList}
-                  className="text-[11px] text-[#C9A26A] hover:text-[#E8C28A] cursor-pointer font-semibold flex items-center gap-1 transition-colors"
-                  title="Salin pesan & daftar foto"
+                  onClick={() => setIsSubmitModalOpen(false)}
+                  className="text-stone-400 hover:text-white p-1.5 sm:p-2 rounded-lg hover:bg-stone-800 transition-colors cursor-pointer shrink-0"
+                  title="Tutup (Esc)"
                 >
-                  <span>📋</span>
-                  <span>{isCopied ? 'Tersalin!' : 'Salin'}</span>
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-              <textarea
-                readOnly
-                rows={5}
-                value={photos
-                  .filter((p) => p && selectedPhotoIds.includes(p.id))
-                  .map((p) => p.filename || `Foto-${p.id}`)
-                  .join('\n')}
-                className={`w-full rounded-xl border p-3 text-xs font-mono focus:outline-none resize-none leading-relaxed select-all ${
-                  isDarkMode
-                    ? 'border-slate-800 bg-slate-950/80 text-slate-200'
-                    : 'border-stone-200 bg-[#FAF8F5] text-stone-800'
-                }`}
-                title="Daftar nama file foto terpilih"
-              />
-            </div>
 
-            {/* Action Buttons: Batal & Kirim via WhatsApp */}
-            <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => setIsSubmitModalOpen(false)}
-                className={`flex-1 rounded-xl border py-2.5 text-xs font-semibold cursor-pointer transition-colors ${
-                  isDarkMode
-                    ? 'border-slate-800 text-slate-300 hover:bg-slate-800'
-                    : 'border-stone-200 text-stone-700 hover:bg-stone-50'
-                }`}
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenWhatsApp}
-                className="flex-1 rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 active:scale-[0.99] py-2.5 text-xs font-bold text-slate-950 shadow-md cursor-pointer transition-all"
-              >
-                Kirim via WhatsApp
-              </button>
+              {/* Mobile Tab Switcher */}
+              <div className="lg:hidden flex border-b border-stone-800 bg-[#161514] px-3 pt-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSubmitModalTab('photos')}
+                  className={`flex-1 pb-2 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    submitModalTab === 'photos'
+                      ? 'border-[#C9A26A] text-[#C9A26A]'
+                      : 'border-transparent text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  <span>1. Pilih Foto ({selectedPhotos.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSubmitModalTab('summary')}
+                  className={`flex-1 pb-2 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    submitModalTab === 'summary'
+                      ? 'border-[#C9A26A] text-[#C9A26A]'
+                      : 'border-transparent text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  <span>2. Ringkasan & Kirim</span>
+                  {hasPrintSizes && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                        isAllPrintSizesChosen
+                          ? 'bg-emerald-500/20 text-emerald-400'
+                          : 'bg-amber-500/20 text-amber-400'
+                      }`}
+                    >
+                      {totalQuotaUsed}/{totalQuotaNeeded}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Modal Body: Split Kiri (Foto Preview + Pilihan Ukuran) & Kanan (Ringkasan & Aksi) */}
+              <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+                {/* SISI KIRI: Grid Foto Terpilih dengan Thumbnail Real & Button Ukuran Cetak */}
+                <div
+                  className={`flex-1 flex-col min-h-0 overflow-y-auto p-3 sm:p-5 min-w-0 [scrollbar-width:thin] [scrollbar-color:#2e2c29_transparent] ${
+                    submitModalTab === 'photos' ? 'flex' : 'hidden lg:flex'
+                  }`}
+                >
+                  <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+                    <p className="text-xs font-semibold text-stone-300">
+                      Foto Terpilih ({selectedPhotos.length}):
+                    </p>
+                    {hasPrintSizes && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] text-stone-400">Kuota Cetak:</span>
+                        <span
+                          className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                            isAllPrintSizesChosen
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                          }`}
+                        >
+                          {totalQuotaUsed} / {totalQuotaNeeded} foto {isAllPrintSizesChosen ? '✓' : ''}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {hasPrintSizes && (
+                    <p className="text-xs sm:text-sm text-amber-300 mb-2 bg-amber-500/10 border border-amber-500/25 rounded-lg px-3 py-2.5 leading-relaxed">
+                      Pilih ukuran cetak untuk setiap foto menggunakan tombol di bawah foto, lalu kirim ke WhatsApp fotografer.
+                    </p>
+                  )}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-3.5">
+                    {selectedPhotos.map((photo, idx) => {
+                      const printSize = photoPrintSizes[photo.id]
+                      return (
+                        <div
+                          key={photo.id || idx}
+                          className={`group relative rounded-xl overflow-hidden border bg-[#0e0d0c] shadow-sm flex flex-col transition-all ${
+                            printSize
+                              ? 'border-emerald-500/70 ring-1 ring-emerald-500/30'
+                              : 'border-stone-800 hover:border-stone-700'
+                          }`}
+                        >
+                          {/* Photo Thumbnail Container */}
+                          <div
+                            onClick={() => {
+                              const foundIdx = filteredPhotos.findIndex((p) => p && p.id === photo.id)
+                              openLightbox(photo, foundIdx >= 0 ? foundIdx : idx)
+                            }}
+                            className="relative aspect-square w-full bg-neutral-900 cursor-pointer overflow-hidden"
+                            title="Klik untuk melihat foto lebih besar"
+                          >
+                            <img
+                              src={getPhotoThumbnailUrl(photo, 600)}
+                              alt={photo.filename}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => handlePhotoImgError(e, photo, 600)}
+                              className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+
+                            {/* Number badge */}
+                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-xs text-[10px] font-bold text-[#C9A26A] border border-[#C9A26A]/40 z-10">
+                              #{idx + 1}
+                            </div>
+
+                            {/* Print Size Tag if selected */}
+                            {printSize ? (
+                              <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold shadow-md flex items-center gap-1 z-10 animate-in fade-in">
+                                <Check className="h-3 w-3 stroke-[3]" />
+                                <span>{printSize}</span>
+                              </div>
+                            ) : (
+                              <div className="absolute top-2 right-2 h-6 w-6 rounded-full bg-black/60 text-white/70 flex items-center justify-center shadow-md z-10">
+                                <Check className="h-3.5 w-3.5 stroke-[2]" />
+                              </div>
+                            )}
+
+                            {/* Filename Overlay */}
+                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-2 pt-6">
+                              <p className="text-[11px] font-medium text-white truncate font-mono">
+                                {photo.filename}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Print Size Selection Control (Button Pills seperti di Halaman Admin) */}
+                          {hasPrintSizes && (
+                            <div className="p-2 bg-[#161514] border-t border-stone-800/80 flex flex-col gap-1.5">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="font-semibold text-stone-400">Pilih Ukuran:</span>
+                                {printSize ? (
+                                  <span className="text-emerald-400 font-bold flex items-center gap-0.5">
+                                    <Check className="h-2.5 w-2.5 stroke-[3]" />
+                                    <span>Cetak {printSize}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-stone-500 font-medium">File Digital</span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {availablePrintSizes.map((size: string) => {
+                                  const isSelected = printSize === size
+                                  const quota = printSizeQuotas[size] ?? 1
+                                  const used = getUsageCountForSize(size)
+                                  const isQuotaFull = used >= quota
+                                  const isDisabled = !isSelected && isQuotaFull
+
+                                  return (
+                                    <button
+                                      key={size}
+                                      type="button"
+                                      disabled={isDisabled}
+                                      onClick={() => setPhotoPrintSize(photo.id, isSelected ? '' : size)}
+                                      title={
+                                        isDisabled
+                                          ? `Kuota ${size} sudah penuh (${used}/${quota} foto)`
+                                          : isSelected
+                                          ? `Klik untuk membatalkan ukuran ${size}`
+                                          : `Pilih ukuran ${size} (${used}/${quota} foto)`
+                                      }
+                                      className={`flex-1 min-w-[44px] py-1.5 px-1 rounded-md text-[11px] font-bold border transition-all flex items-center justify-center gap-0.5 ${
+                                        isSelected
+                                          ? 'bg-emerald-500/15 border-emerald-500/60 text-emerald-300 shadow-xs cursor-pointer'
+                                          : isDisabled
+                                          ? 'bg-[#121110] border-stone-800/60 text-stone-600 opacity-40 cursor-not-allowed'
+                                          : 'bg-[#0e0d0c] border-stone-800 text-stone-400 hover:border-stone-700 hover:text-stone-200 cursor-pointer'
+                                      }`}
+                                    >
+                                      {isSelected && (
+                                        <Check className="h-2.5 w-2.5 stroke-[3] text-emerald-400 shrink-0" />
+                                      )}
+                                      <span>{size}</span>
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Mobile Action Bar for Tab Foto */}
+                  <div className="lg:hidden shrink-0 pt-3 mt-3 border-t border-stone-800/80 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsSubmitModalOpen(false)}
+                      className="rounded-xl border border-stone-800 bg-[#242220] hover:bg-[#2d2a27] text-stone-300 px-3.5 py-2.5 text-xs font-semibold cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    {isAllPrintSizesChosen ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenWhatsApp}
+                        className="flex-1 rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] py-2.5 px-3 text-xs font-bold text-slate-950 shadow-md cursor-pointer flex items-center justify-center gap-1.5 animate-in fade-in"
+                      >
+                        <Send className="h-4 w-4" />
+                        <span>Kirim via WhatsApp</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setSubmitModalTab('summary')}
+                        className="flex-1 rounded-xl bg-[#201e1c] hover:bg-[#2a2724] border border-stone-700 py-2.5 px-3 text-xs font-semibold text-[#C9A26A] flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <span>Lihat Ringkasan ({totalQuotaUsed}/{totalQuotaNeeded})</span>
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* SISI KANAN: Ringkasan, Textarea & Tombol Kirim WhatsApp */}
+                <div
+                  className={`w-full lg:w-[380px] xl:w-[420px] shrink-0 border-t lg:border-t-0 lg:border-l border-stone-800 bg-[#141312] p-4 sm:p-5 flex-col overflow-y-auto min-h-0 flex-1 lg:flex-initial ${
+                    submitModalTab === 'summary' ? 'flex' : 'hidden lg:flex'
+                  }`}
+                >
+                  {/* Summary Card */}
+                  <div className="rounded-xl border border-stone-800 bg-[#0e0d0c] p-3.5 space-y-2 text-xs mb-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-stone-400">Klien / Acara:</span>
+                      <span className="font-semibold text-white truncate max-w-[200px]">{gallery?.clientName}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-stone-400">Total Foto Dipilih:</span>
+                      <span className="font-bold text-[#C9A26A]">
+                        {selectedPhotos.length} dari {maxPhotos} foto
+                      </span>
+                    </div>
+                    {hasPrintSizes && (
+                      <div className="pt-2 border-t border-stone-800/80 space-y-1.5">
+                        <span className="text-stone-400 font-medium block">Kuota Ukuran Cetak:</span>
+                        <div className="space-y-1">
+                          {availablePrintSizes.map((size) => {
+                            const quota = printSizeQuotas[size] ?? 1
+                            const used = getUsageCountForSize(size)
+                            const isFull = used === quota
+                            return (
+                              <div key={size} className="flex justify-between items-center text-xs">
+                                <span className="text-stone-300 font-semibold">{size}:</span>
+                                <span className={isFull ? 'text-emerald-400 font-bold' : 'text-amber-400 font-semibold'}>
+                                  {used} / {quota} foto {isFull ? '✓ Selesai' : `(Kurang ${quota - used})`}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Notification Alert */}
+                  {isAllPrintSizesChosen ? (
+                    <div className="flex items-center gap-2 rounded-xl bg-emerald-950/40 border border-emerald-800/50 px-3 py-2 text-xs font-medium text-emerald-300 mb-3 animate-in fade-in">
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                      <span>Semua ukuran cetak sudah sesuai kuota! Siap dikirim ke fotografer.</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-xl bg-amber-950/30 border border-amber-800/40 px-3 py-2 text-xs font-medium text-amber-300 mb-3 animate-in fade-in">
+                      <span className="text-amber-400 font-bold shrink-0">⚠️</span>
+                      <span>
+                        Tentukan foto untuk {remainingQuota} kuota cetak yang belum dipilih sebelum mengirim ke WhatsApp.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Header Textarea & Tombol Salin */}
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-xs font-semibold text-stone-200">
+                      Format pesan WhatsApp:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyList}
+                      className="px-2.5 py-1 rounded-md bg-[#242220] hover:bg-[#2d2a27] border border-stone-700 text-[#C9A26A] text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-95"
+                      title="Salin pesan & daftar foto"
+                    >
+                      {isCopied ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 stroke-[2.5]" />
+                          <span>Tersalin!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5" />
+                          <span>Salin</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Textarea Preview */}
+                  <div className="flex-1 min-h-[140px] rounded-xl border border-stone-800 bg-[#0a0a09] p-3 flex flex-col mb-4 overflow-hidden">
+                    <textarea
+                      readOnly
+                      rows={6}
+                      value={selectedPhotos
+                        .map((p) => {
+                          const name = p.filename || `Foto-${p.id}`
+                          const size = availablePrintSizes.length > 0 ? photoPrintSizes[p.id] : undefined
+                          return size ? `${name} — cetak ${size},` : `${name},`
+                        })
+                        .join('\n')}
+                      className="w-full flex-1 font-mono text-xs text-stone-300 bg-transparent resize-none focus:outline-none select-all leading-relaxed"
+                      title="Pratinjau pesan yang akan dikirim"
+                    />
+                  </div>
+
+                  {/* Action Buttons: Batal & Kirim via WhatsApp */}
+                  <div className="flex items-center gap-2.5 pt-1 mt-auto">
+                    <button
+                      type="button"
+                      onClick={() => setSubmitModalTab('photos')}
+                      className="lg:hidden rounded-xl border border-stone-800 bg-[#242220] hover:bg-[#2d2a27] text-stone-300 px-3.5 py-2.5 text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      ← Foto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsSubmitModalOpen(false)}
+                      className="hidden lg:block rounded-xl border border-stone-800 bg-[#242220] hover:bg-[#2d2a27] text-stone-300 px-4 py-2.5 text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      Batal
+                    </button>
+                    {isAllPrintSizesChosen ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenWhatsApp}
+                        className="flex-1 rounded-xl bg-gradient-to-r from-[#9C7844] to-[#C9A26A] hover:brightness-110 active:scale-[0.99] py-2.5 px-4 text-xs font-bold text-slate-950 shadow-md cursor-pointer transition-all flex items-center justify-center gap-2 animate-in fade-in"
+                      >
+                        <Send className="h-4 w-4" />
+                        <span>Kirim via WhatsApp</span>
+                      </button>
+                    ) : (
+                      <div className="flex-1 rounded-xl bg-amber-500/10 border border-amber-500/20 py-2.5 px-3 text-center text-xs font-semibold text-amber-300/80 select-none cursor-not-allowed">
+                        Tentukan Ukuran Cetak ({totalQuotaUsed}/{totalQuotaNeeded})
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

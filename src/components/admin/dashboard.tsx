@@ -23,6 +23,7 @@ import {
   ChevronRight,
   Copy,
   Download,
+  LayoutGrid,
 } from 'lucide-react'
 import { createZipBlob } from '../../lib/zipHelper.ts'
 import { signOutAdmin } from '../../lib/firebase.ts'
@@ -33,6 +34,8 @@ import {
   deleteGallery,
   deleteMultipleGalleries,
   syncGalleriesFromFirestore,
+  getPhotoThumbnailUrl,
+  handlePhotoImgError,
   type GalleryData,
   type GalleryPhoto,
 } from '../../lib/galleryStore.ts'
@@ -165,15 +168,15 @@ export default function Dashboard() {
     const albumLink = `${baseUrl}/${safeSlug}-3?t=${gallery.shareToken || 'vtmsvc3urqfm'}`
 
     const fullMessage = `Hallo Kak, ${gallery.clientName.toUpperCase()} 👋
-Foto-foto dokumentasi dari Livesostory sudah siap nih!
+Foto-foto dokumentasi acara kaka dari Livesostory sudah siap nih!
 
-Yuk pilih foto favorit kamu di sini:
+Yuk pilih foto favorit dan foto yang akan dicetak di sini:
 👉 ${selectionLink}
 
 Mau pamerin ke teman & keluarga? Tinggal share link ini ya:
 👉 ${albumLink}
 
-Selamat memilih foto dan enjoy your moments! ✨`
+Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan enjoy your moments! ✨`
 
     setShareModalData({
       clientName: gallery.clientName,
@@ -208,6 +211,36 @@ Selamat memilih foto dan enjoy your moments! ✨`
   const [clientName, setClientName] = useState('')
   const [clientWhatsapp, setClientWhatsapp] = useState('')
   const [allowDownload, setAllowDownload] = useState(true)
+  const [printSizes, setPrintSizes] = useState<string[]>([])
+  const [printSizeQuotas, setPrintSizeQuotas] = useState<Record<string, number>>({})
+
+  const ALL_PRINT_SIZES = ['22R', '20R', '18R', '16R', '14R', '12R', '10R']
+
+  const togglePrintSize = (size: string) => {
+    setPrintSizes((prev) => {
+      if (prev.includes(size)) {
+        return prev.filter((s) => s !== size)
+      } else {
+        return [...prev, size]
+      }
+    })
+    setPrintSizeQuotas((prev) => {
+      if (prev[size]) {
+        const next = { ...prev }
+        delete next[size]
+        return next
+      } else {
+        return { ...prev, [size]: 1 }
+      }
+    })
+  }
+
+  const handleSetPrintSizeQuota = (size: string, qty: number) => {
+    setPrintSizeQuotas((prev) => ({
+      ...prev,
+      [size]: Math.max(1, qty),
+    }))
+  }
 
   // Scanned photos preview state (Real-time scan hasil foto Drive)
   const [scannedPhotos, setScannedPhotos] = useState<DrivePhotoItem[]>([])
@@ -218,7 +251,20 @@ Selamat memilih foto dan enjoy your moments! ✨`
   const [showAllScannedModal, setShowAllScannedModal] = useState(false)
   const [galleryToDelete, setGalleryToDelete] = useState<GalleryData | null>(null)
   const [viewingSelectedGallery, setViewingSelectedGallery] = useState<GalleryData | null>(null)
+  const [viewingSelectedTab, setViewingSelectedTab] = useState<'photos' | 'list'>('photos')
   const [selectedLightboxPhoto, setSelectedLightboxPhoto] = useState<GalleryPhoto | null>(null)
+  const [isMobileUserMenuOpen, setIsMobileUserMenuOpen] = useState(false)
+  const mobileUserMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (mobileUserMenuRef.current && !mobileUserMenuRef.current.contains(e.target as Node)) {
+        setIsMobileUserMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const confirmDeleteGallery = (gallery: GalleryData) => {
     const updated = deleteGallery(gallery.id, gallery.slug)
@@ -261,6 +307,34 @@ Selamat memilih foto dan enjoy your moments! ✨`
   const [isEditScanning, setIsEditScanning] = useState(false)
   const [editScanError, setEditScanError] = useState<string | null>(null)
   const [editScanSuccessMsg, setEditScanSuccessMsg] = useState<string | null>(null)
+  const [editPrintSizes, setEditPrintSizes] = useState<string[]>([])
+  const [editPrintSizeQuotas, setEditPrintSizeQuotas] = useState<Record<string, number>>({})
+
+  const toggleEditPrintSize = (size: string) => {
+    setEditPrintSizes((prev) => {
+      if (prev.includes(size)) {
+        return prev.filter((s) => s !== size)
+      } else {
+        return [...prev, size]
+      }
+    })
+    setEditPrintSizeQuotas((prev) => {
+      if (prev[size]) {
+        const next = { ...prev }
+        delete next[size]
+        return next
+      } else {
+        return { ...prev, [size]: 1 }
+      }
+    })
+  }
+
+  const handleSetEditPrintSizeQuota = (size: string, qty: number) => {
+    setEditPrintSizeQuotas((prev) => ({
+      ...prev,
+      [size]: Math.max(1, qty),
+    }))
+  }
 
   const openEditModal = (gallery: GalleryData) => {
     setGalleryToEdit(gallery)
@@ -277,6 +351,13 @@ Selamat memilih foto dan enjoy your moments! ✨`
     setIsEditScanning(false)
     setEditScanError(null)
     setEditScanSuccessMsg(null)
+    const sizes = Array.isArray(gallery.printSizes) ? gallery.printSizes : []
+    setEditPrintSizes(sizes)
+    const quotas: Record<string, number> = {}
+    sizes.forEach((s) => {
+      quotas[s] = gallery.printSizeQuotas?.[s] || 1
+    })
+    setEditPrintSizeQuotas(quotas)
   }
 
   const handleEditWhatsappChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -338,6 +419,11 @@ Selamat memilih foto dan enjoy your moments! ✨`
       return
     }
 
+    if (editPrintSizes.length === 0) {
+      showToast('Harap pilih minimal satu Opsi Ukuran Cetak.')
+      return
+    }
+
     const editAvailablePhotosCount = (
       editNewScannedPhotos && editNewScannedPhotos.length > 0
         ? editNewScannedPhotos
@@ -379,6 +465,8 @@ Selamat memilih foto dan enjoy your moments! ✨`
           ? editNewScannedPhotos[0]?.url || editingGallery.coverUrl
           : editingGallery.coverUrl,
       selectedPhotos: editingGallery.selectedPhotoIds?.length || 0,
+      printSizes: editPrintSizes.length > 0 ? editPrintSizes : undefined,
+      printSizeQuotas: editPrintSizes.length > 0 ? editPrintSizeQuotas : undefined,
     }
 
     const updatedList = updateGallery(updatedItem)
@@ -619,6 +707,8 @@ Selamat memilih foto dan enjoy your moments! ✨`
     setClientName('')
     setClientWhatsapp('')
     setAllowDownload(true)
+    setPrintSizes([])
+    setPrintSizeQuotas({})
     setScannedPhotos([])
     setIsScanningLink(false)
     setScanError(null)
@@ -709,6 +799,11 @@ Selamat memilih foto dan enjoy your moments! ✨`
       return
     }
 
+    if (printSizes.length === 0) {
+      showToast('Harap pilih minimal satu Opsi Ukuran Cetak.')
+      return
+    }
+
     const parsedMaxPhotosInput = parseInt(maxPhotos) || 60
     if (scannedPhotos.length > 0 && parsedMaxPhotosInput > scannedPhotos.length) {
       showToast(
@@ -783,6 +878,8 @@ Selamat memilih foto dan enjoy your moments! ✨`
         selectedPhotoIds: [],
         photos,
         allowDownload,
+        printSizes: printSizes.length > 0 ? printSizes : undefined,
+        printSizeQuotas: printSizes.length > 0 ? printSizeQuotas : undefined,
       }
 
       // Simpan langsung ke storage dan update state seketika
@@ -822,6 +919,19 @@ Selamat memilih foto dan enjoy your moments! ✨`
   const [finishedTimeFilter, setFinishedTimeFilter] = useState<'all' | 'older_1_month'>('all')
   const [isDeleteOlderModalOpen, setIsDeleteOlderModalOpen] = useState(false)
   const [isDeletingOlder, setIsDeletingOlder] = useState(false)
+
+  // Kunci scroll halaman belakang saat ada modal/lightbox terbuka
+  const isAnyModalOpen = Boolean(
+    editingGallery || galleryToDelete || isShareModalOpen || isScanningModalOpen ||
+    previewLightboxPhoto || showAllScannedModal || viewingSelectedGallery ||
+    selectedLightboxPhoto || isDeleteOlderModalOpen
+  )
+  useEffect(() => {
+    if (!isAnyModalOpen) return
+    const orig = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = orig }
+  }, [isAnyModalOpen])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -977,19 +1087,46 @@ Selamat memilih foto dan enjoy your moments! ✨`
           </span>
         </div>
 
-        {/* Sisi Kanan: Menu Beranda | Icon & Button Logout */}
-        <div className="flex items-center gap-3 sm:gap-4">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#242220] border border-[#C9A26A]/40 text-[#C9A26A] font-semibold text-xs sm:text-sm">
+        {/* Sisi Kanan: Menu Beranda (dengan dropdown Logout di mobile) | Icon & Button Logout di Desktop */}
+        <div ref={mobileUserMenuRef} className="relative flex items-center gap-3 sm:gap-4">
+          <button
+            type="button"
+            onClick={() => setIsMobileUserMenuOpen((prev) => !prev)}
+            className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 rounded-lg bg-[#242220] border border-[#C9A26A]/40 text-[#C9A26A] font-semibold text-xs sm:text-sm cursor-pointer hover:bg-[#2d2a27] transition-colors"
+          >
             <Home className="h-4 w-4" />
             <span>Beranda</span>
-          </div>
+            <ChevronDown
+              className={`h-3.5 w-3.5 text-[#C9A26A] sm:hidden transition-transform duration-200 ${
+                isMobileUserMenuOpen ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
 
-          <div className="h-4 w-px bg-stone-800" />
+          {/* Dropdown Logout saat Mobile View */}
+          {isMobileUserMenuOpen && (
+            <div className="sm:hidden absolute right-0 top-full mt-2 w-36 rounded-xl bg-[#181716] border border-stone-800 shadow-2xl py-1 z-50 animate-in fade-in zoom-in-95">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileUserMenuOpen(false)
+                  handleLogout()
+                }}
+                className="w-full px-3 py-2 text-left text-xs font-semibold text-rose-400 hover:bg-rose-950/30 flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>Logout</span>
+              </button>
+            </div>
+          )}
 
+          <div className="hidden sm:block h-4 w-px bg-stone-800" />
+
+          {/* Button Logout Desktop */}
           <button
             type="button"
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-stone-300 hover:text-rose-400 hover:bg-rose-500/10 border border-stone-800 hover:border-rose-500/30 text-xs sm:text-sm font-medium transition-all cursor-pointer"
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-stone-300 hover:text-rose-400 hover:bg-rose-500/10 border border-stone-800 hover:border-rose-500/30 text-xs sm:text-sm font-medium transition-all cursor-pointer"
             title="Keluar dari akun admin"
           >
             <LogOut className="h-4 w-4" />
@@ -1166,7 +1303,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
               GAMBAR 1: FORM BUAT GALERI BARU & SINKRONISASI DRIVE (POSISI KIRI)
           ========================================================================= */}
           <div className="w-full lg:w-[420px] xl:w-[460px] shrink-0 lg:sticky lg:top-20">
-            <div className="rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-xl p-5 sm:p-6">
+            <div className="rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-xl p-5 sm:p-6 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#292524_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-stone-800 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent">
               {/* Form Header */}
               <div className="border-b border-stone-800 pb-4 mb-5 flex items-center gap-3">
                 <div className="h-9 w-9 rounded-xl bg-[#C9A26A]/15 text-[#C9A26A] border border-[#C9A26A]/30 flex items-center justify-center shrink-0">
@@ -1250,8 +1387,11 @@ Selamat memilih foto dan enjoy your moments! ✨`
                             className="aspect-square rounded-md border border-stone-800 overflow-hidden bg-[#141312] cursor-pointer hover:border-[#C9A26A]/50 hover:scale-105 transition-all"
                           >
                             <img
-                              src={ph.thumbnailUrl || ph.url}
+                              src={getPhotoThumbnailUrl(ph, 300)}
                               alt={ph.filename}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => handlePhotoImgError(e, ph, 300)}
                               className="h-full w-full object-cover"
                             />
                           </div>
@@ -1451,6 +1591,90 @@ Selamat memilih foto dan enjoy your moments! ✨`
                   </div>
                 </div>
 
+                {/* 5. Opsi Ukuran Cetak */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-stone-200 flex items-center gap-2">
+                      <span>5. Opsi Ukuran Cetak</span>
+                      <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
+                        Wajib
+                      </span>
+                    </label>
+                    {printSizes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setPrintSizes([])}
+                        className="text-[11px] text-stone-400 hover:text-rose-400 transition-colors cursor-pointer"
+                      >
+                        Reset ({printSizes.length})
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                    {ALL_PRINT_SIZES.map((size) => {
+                      const isChecked = printSizes.includes(size)
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => togglePrintSize(size)}
+                          className={`flex-1 min-w-[70px] sm:min-w-0 py-2.5 sm:py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
+                            isChecked
+                              ? 'bg-emerald-500/15 border-emerald-500/60 text-emerald-300 shadow-xs'
+                              : 'bg-[#0e0d0c] border-stone-800 text-stone-400 hover:border-stone-700 hover:text-stone-200'
+                          }`}
+                        >
+                          {isChecked && <Check className="h-3 w-3 stroke-[3] text-emerald-400 shrink-0" />}
+                          <span>{size}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[11px] text-stone-400 mt-1.5">
+                    Pilih ukuran cetak yang ditawarkan ke klien (bisa pilih lebih dari satu).
+                  </p>
+
+                  {/* Input Jumlah Foto per Ukuran yang Dipilih */}
+                  {printSizes.length > 0 && (
+                    <div className="mt-3 p-3 rounded-xl bg-[#0e0d0c] border border-stone-800 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-stone-200">
+                          Jumlah Foto per Ukuran Cetak:
+                        </span>
+                        <span className="text-[11px] text-stone-400">
+                          {printSizes.length} ukuran dipilih
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {printSizes.map((size) => (
+                          <div
+                            key={size}
+                            className="flex items-center justify-between p-2.5 rounded-lg bg-[#141312] border border-stone-800"
+                          >
+                            <span className="text-xs font-bold text-emerald-400">{size}</span>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                min={1}
+                                value={printSizeQuotas[size] ?? 1}
+                                onChange={(e) =>
+                                  handleSetPrintSizeQuota(
+                                    size,
+                                    Math.max(1, parseInt(e.target.value) || 1)
+                                  )
+                                }
+                                className="w-16 px-2 py-1 text-center text-xs font-bold bg-[#1f1d1b] border border-stone-700 rounded text-white focus:outline-none focus:border-[#C9A26A]"
+                              />
+                              <span className="text-[11px] text-stone-400">foto</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Checkbox Download */}
                 <div className="p-3.5 rounded-lg border bg-[#0e0d0c] border-stone-800">
                   <label className="flex items-center gap-3 cursor-pointer">
@@ -1645,9 +1869,14 @@ Selamat memilih foto dan enjoy your moments! ✨`
                                 <img
                                   src={gallery.coverUrl}
                                   alt={gallery.clientName}
+                                  referrerPolicy="no-referrer"
                                   className="h-full w-full object-cover"
                                   onError={(e) => {
-                                    e.currentTarget.style.display = 'none'
+                                    if (gallery.photos && gallery.photos[0]) {
+                                      handlePhotoImgError(e, gallery.photos[0], 400)
+                                    } else {
+                                      e.currentTarget.style.display = 'none'
+                                    }
                                   }}
                                 />
                               ) : (
@@ -1722,7 +1951,10 @@ Selamat memilih foto dan enjoy your moments! ✨`
                           {selectedCount > 0 ? (
                             <button
                               type="button"
-                              onClick={() => setViewingSelectedGallery(gallery)}
+                              onClick={() => {
+                                setViewingSelectedTab('photos')
+                                setViewingSelectedGallery(gallery)
+                              }}
                               className="w-full py-2 px-3 rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-[#C9A26A] border border-[#C9A26A]/40 font-semibold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer"
                             >
                               <CheckCircle2 className="h-4 w-4" />
@@ -1759,6 +1991,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
                               <span className="truncate">Buka Drive</span>
                             </button>
 
+                            {gallery.status !== 'Selesai dipilih' && (
                             <button
                               type="button"
                               onClick={() => openEditModal(gallery)}
@@ -1767,11 +2000,12 @@ Selamat memilih foto dan enjoy your moments! ✨`
                               <Pencil className="h-3.5 w-3.5" />
                               <span>Edit</span>
                             </button>
+                            )}
 
                             <button
                               type="button"
                               onClick={() => setGalleryToDelete(gallery)}
-                              className="border border-rose-900/40 bg-[#1c1a19] hover:bg-rose-950/30 text-rose-400 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                              className={`border border-rose-900/40 bg-[#1c1a19] hover:bg-rose-950/30 text-rose-400 py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer${gallery.status === 'Selesai dipilih' ? ' col-span-2' : ''}`}
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                               <span>Hapus</span>
@@ -1956,29 +2190,30 @@ Selamat memilih foto dan enjoy your moments! ✨`
 
       {/* 2. Modal Edit Galeri */}
       {editingGallery && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-2.5 sm:p-4 overflow-y-auto">
+          <div className="w-full max-w-2xl max-h-[92vh] sm:max-h-[90vh] flex flex-col rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl my-auto overflow-hidden animate-in fade-in zoom-in-95">
             {/* Header */}
-            <div className="border-b border-stone-800 px-6 py-4 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-white">Edit Galeri</h3>
-                <p className="text-xs text-stone-400">{editingGallery.clientName}</p>
+            <div className="border-b border-stone-800 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between shrink-0 bg-[#181716]">
+              <div className="min-w-0 pr-2">
+                <h3 className="text-sm font-bold text-white truncate">Edit Galeri</h3>
+                <p className="text-xs text-stone-400 truncate">{editingGallery.clientName}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setGalleryToEdit(null)}
-                className="text-stone-400 hover:text-white p-1.5 rounded-lg hover:bg-[#242220] transition-colors cursor-pointer"
+                className="text-stone-400 hover:text-white p-1.5 rounded-lg hover:bg-[#242220] transition-colors cursor-pointer shrink-0"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveEdit} className="p-6 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-stone-300 mb-1.5">
-                    Nama Klien / Acara
-                  </label>
+            <form onSubmit={handleSaveEdit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 [scrollbar-width:thin] [scrollbar-color:#2e2c29_transparent]">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-300 mb-1.5">
+                      Nama Klien / Acara
+                    </label>
                   <input
                     type="text"
                     required
@@ -2002,9 +2237,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
                     className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                     Slug URL
@@ -2039,10 +2272,9 @@ Selamat memilih foto dan enjoy your moments! ✨`
                     <option value="Selesai dipilih">Selesai dipilih</option>
                   </select>
                 </div>
-              </div>
 
-              <div>
-                {(() => {
+                <div>
+                  {(() => {
                   const editAvailablePhotosCount = (
                     editNewScannedPhotos && editNewScannedPhotos.length > 0
                       ? editNewScannedPhotos
@@ -2179,64 +2411,134 @@ Selamat memilih foto dan enjoy your moments! ✨`
                 })()}
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-stone-300 mb-1.5">
-                  Link Folder Google Drive
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={editDriveLink}
-                    onChange={(e) => setEditDriveLink(e.target.value)}
-                    placeholder="https://drive.google.com/drive/folders/..."
-                    className="flex-1 rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleEditRescanDrive}
-                    disabled={isEditScanning}
-                    className="rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 px-3.5 py-2 text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-                  >
-                    {isEditScanning ? 'Memindai...' : 'Pindai Ulang'}
-                  </button>
+                <div>
+                  <label className="block text-xs font-semibold text-stone-300 mb-1.5">
+                    Link Folder Google Drive
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="url"
+                      value={editDriveLink}
+                      onChange={(e) => setEditDriveLink(e.target.value)}
+                      placeholder="https://drive.google.com/drive/folders/..."
+                      className="flex-1 min-w-0 rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleEditRescanDrive}
+                      disabled={isEditScanning}
+                      className="rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:opacity-50 cursor-pointer shrink-0 whitespace-nowrap"
+                    >
+                      {isEditScanning ? 'Memindai...' : 'Pindai Ulang'}
+                    </button>
+                  </div>
+                  {editScanError && (
+                    <p className="text-[11px] font-medium text-rose-400 mt-1">
+                      {editScanError}
+                    </p>
+                  )}
+                  {editScanSuccessMsg && (
+                    <p className="text-[11px] font-medium text-emerald-400 mt-1">
+                      {editScanSuccessMsg}
+                    </p>
+                  )}
                 </div>
-                {editScanError && (
-                  <p className="text-[11px] font-medium text-rose-400 mt-1">
-                    {editScanError}
-                  </p>
+
+                {/* Opsi Ukuran Cetak (Edit) */}
+                <div className="sm:col-span-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-stone-300 flex items-center gap-2">
+                    <span>Opsi Ukuran Cetak</span>
+                    <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
+                      Wajib
+                    </span>
+                  </label>
+                  {editPrintSizes.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setEditPrintSizes([])}
+                      className="text-[11px] text-stone-400 hover:text-rose-400 transition-colors cursor-pointer"
+                    >
+                      Reset ({editPrintSizes.length})
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                  {ALL_PRINT_SIZES.map((size) => {
+                    const isChecked = editPrintSizes.includes(size)
+                    return (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() => toggleEditPrintSize(size)}
+                        className={`flex-1 min-w-[70px] sm:min-w-0 py-2.5 sm:py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
+                          isChecked
+                            ? 'bg-emerald-500/15 border-emerald-500/60 text-emerald-300 shadow-xs'
+                            : 'bg-[#0e0d0c] border-stone-800 text-stone-400 hover:border-stone-700 hover:text-stone-200'
+                        }`}
+                      >
+                        {isChecked && <Check className="h-3 w-3 stroke-[3] text-emerald-400 shrink-0" />}
+                        <span>{size}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Input Jumlah Foto per Ukuran Cetak (Edit) */}
+                {editPrintSizes.length > 0 && (
+                  <div className="mt-3 p-3 rounded-xl bg-[#0e0d0c] border border-stone-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-stone-200">
+                        Jumlah Foto per Ukuran Cetak:
+                      </span>
+                      <span className="text-[11px] text-stone-400">
+                        {editPrintSizes.length} ukuran dipilih
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {editPrintSizes.map((size) => (
+                        <div
+                          key={size}
+                          className="flex items-center justify-between p-2.5 rounded-lg bg-[#141312] border border-stone-800"
+                        >
+                          <span className="text-xs font-bold text-emerald-400">{size}</span>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min={1}
+                              value={editPrintSizeQuotas[size] ?? 1}
+                              onChange={(e) =>
+                                handleSetEditPrintSizeQuota(
+                                  size,
+                                  Math.max(1, parseInt(e.target.value) || 1)
+                                )
+                              }
+                              className="w-16 px-2 py-1 text-center text-xs font-bold bg-[#1f1d1b] border border-stone-700 rounded text-white focus:outline-none focus:border-[#C9A26A]"
+                            />
+                            <span className="text-[11px] text-stone-400">foto</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
-                {editScanSuccessMsg && (
-                  <p className="text-[11px] font-medium text-emerald-400 mt-1">
-                    {editScanSuccessMsg}
-                  </p>
-                )}
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-stone-300 mb-1.5">
-                  PIN Keamanan Album (Opsional)
-                </label>
-                <input
-                  type="text"
-                  maxLength={8}
-                  value={editPinCode}
-                  onChange={(e) => setEditPinCode(e.target.value)}
-                  placeholder="Contoh: 1234 (4-8 digit angka)"
-                  className="w-full rounded-lg border border-stone-800 p-2.5 text-xs text-white bg-[#0e0d0c] focus:outline-none focus:ring-1 focus:ring-[#C9A26A]/30 focus:border-[#C9A26A]"
-                />
-              </div>
-
-              <div className="border-t border-stone-800 pt-4 flex justify-end gap-2.5">
+              {/* Sticky Footer */}
+              <div className="border-t border-stone-800 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-end gap-2.5 shrink-0 bg-[#181716]">
                 <button
                   type="button"
                   onClick={() => setGalleryToEdit(null)}
-                  className="rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-stone-300 border border-stone-800 px-4 py-2 text-xs font-semibold transition-colors cursor-pointer"
+                  className="flex-1 sm:flex-none rounded-lg bg-[#242220] hover:bg-[#2d2a27] text-stone-300 border border-stone-800 px-4 py-2.5 sm:py-2 text-xs font-semibold transition-colors cursor-pointer text-center"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 font-bold px-5 py-2 text-xs shadow-xs transition-colors cursor-pointer"
+                  className="flex-1 sm:flex-none rounded-lg bg-[#C9A26A] hover:bg-[#ba965c] text-stone-950 font-bold px-5 py-2.5 sm:py-2 text-xs shadow-xs transition-colors cursor-pointer text-center"
                 >
                   Simpan Perubahan
                 </button>
@@ -2373,8 +2675,10 @@ Selamat memilih foto dan enjoy your moments! ✨`
               </button>
             </div>
             <img
-              src={previewLightboxPhoto.url || previewLightboxPhoto.thumbnailUrl}
+              src={previewLightboxPhoto.url || (previewLightboxPhoto.fileId ? `https://drive.google.com/thumbnail?id=${previewLightboxPhoto.fileId}&sz=w1600` : previewLightboxPhoto.thumbnailUrl || '')}
               alt={previewLightboxPhoto.filename}
+              referrerPolicy="no-referrer"
+              onError={(e) => handlePhotoImgError(e, previewLightboxPhoto, 1600)}
               className="max-h-[75vh] w-auto rounded-xl object-contain"
             />
           </div>
@@ -2428,9 +2732,11 @@ Selamat memilih foto dan enjoy your moments! ✨`
                     className="group relative w-full aspect-square rounded-xl border border-stone-800 bg-[#0e0d0c] overflow-hidden cursor-pointer shadow-xs hover:border-[#C9A26A] hover:shadow-lg transition-all duration-200"
                   >
                     <img
-                      src={p.thumbnailUrl || p.url}
+                      src={getPhotoThumbnailUrl(p, 400)}
                       alt={p.filename}
                       loading="lazy"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => handlePhotoImgError(e, p, 400)}
                       className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
                     />
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent p-2 pt-5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between text-[11px] text-white">
@@ -2471,43 +2777,41 @@ Selamat memilih foto dan enjoy your moments! ✨`
 
         return (
           <div
-            className="fixed inset-0 z-[75] flex items-center justify-center bg-black/85 backdrop-blur-md p-3 sm:p-5 overflow-y-auto"
+            className="fixed inset-0 z-[75] flex items-center justify-center bg-black/85 backdrop-blur-md p-2 sm:p-4 md:p-5 overflow-y-auto"
             onClick={() => setViewingSelectedGallery(null)}
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-6xl h-[85vh] rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
+              className="w-full max-w-6xl max-h-[96dvh] h-[96dvh] sm:max-h-[85vh] sm:h-[85vh] rounded-2xl border border-stone-800 bg-[#141312] text-white shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 my-auto"
             >
               {/* Modal Header */}
-              <div className="border-b border-stone-800 px-6 py-4 flex items-center justify-between shrink-0 bg-[#181716]">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-[#C9A26A]/15 border border-[#C9A26A]/30 text-[#C9A26A] flex items-center justify-center font-bold">
-                    <CheckCircle2 className="h-5 w-5" />
+              <div className="border-b border-stone-800 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between shrink-0 bg-[#181716]">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[#C9A26A]/15 border border-[#C9A26A]/30 text-[#C9A26A] flex items-center justify-center font-bold shrink-0">
+                    <CheckCircle2 className="h-4 w-4 sm:h-5 sm:w-5" />
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2.5">
-                      <h3 className="text-base font-bold text-white">
-                        Foto Pilihan Klien — {viewingSelectedGallery.clientName}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm sm:text-base font-bold text-white truncate max-w-[200px] sm:max-w-none">
+                        Foto Pilihan — {viewingSelectedGallery.clientName}
                       </h3>
-                      <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                      <span className="text-[11px] sm:text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold shrink-0">
                         {viewingSelectedGallery.selectedPhotos || 0} Terpilih
                       </span>
                     </div>
-                    <p className="text-xs text-stone-400 mt-0.5 flex items-center gap-2 flex-wrap">
-                      <span>Total Koleksi: <strong className="text-stone-200">{viewingSelectedGallery.photos?.length || 0}</strong> foto</span>
+                    <p className="text-[11px] sm:text-xs text-stone-400 mt-0.5 flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                      <span>Koleksi: {viewingSelectedGallery.photos?.length || 0}</span>
                       <span>•</span>
-                      <span>Batas Maks: {viewingSelectedGallery.maxPhotos} foto</span>
+                      <span>Maks: {viewingSelectedGallery.maxPhotos}</span>
                       <span>•</span>
                       <span className="inline-flex items-center gap-1 text-[#C9A26A]">
                         <Eye className="h-3 w-3" />
                         <span>Dibuka {viewingSelectedGallery.viewCount || (viewingSelectedGallery.isClientViewed ? 1 : 0)}x</span>
                       </span>
-                      <span>•</span>
-                      <span>Status: <strong className="text-stone-200">{viewingSelectedGallery.status}</strong></span>
                       {viewingSelectedGallery.whatsapp && (
                         <>
                           <span>•</span>
-                          <span>WA: {viewingSelectedGallery.whatsapp}</span>
+                          <span className="truncate max-w-[120px]">WA: {viewingSelectedGallery.whatsapp}</span>
                         </>
                       )}
                     </p>
@@ -2517,9 +2821,38 @@ Selamat memilih foto dan enjoy your moments! ✨`
                 <button
                   type="button"
                   onClick={() => setViewingSelectedGallery(null)}
-                  className="text-stone-400 hover:text-white p-2 rounded-lg hover:bg-stone-800 transition-colors cursor-pointer"
+                  className="text-stone-400 hover:text-white p-1.5 sm:p-2 rounded-lg hover:bg-stone-800 transition-colors cursor-pointer shrink-0"
+                  title="Tutup (Esc)"
                 >
                   <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Mobile Tab Switcher */}
+              <div className="lg:hidden flex border-b border-stone-800 bg-[#161514] px-3 pt-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setViewingSelectedTab('photos')}
+                  className={`flex-1 pb-2 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    viewingSelectedTab === 'photos'
+                      ? 'border-[#C9A26A] text-[#C9A26A]'
+                      : 'border-transparent text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                  <span>1. Grid Foto ({selectedPhotos.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewingSelectedTab('list')}
+                  className={`flex-1 pb-2 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    viewingSelectedTab === 'list'
+                      ? 'border-[#C9A26A] text-[#C9A26A]'
+                      : 'border-transparent text-stone-400 hover:text-stone-200'
+                  }`}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>2. Daftar File & Unduh ZIP</span>
                 </button>
               </div>
 
@@ -2540,41 +2873,81 @@ Selamat memilih foto dan enjoy your moments! ✨`
                 ) : (
                   <>
                     {/* SISI KIRI: Grid Foto yang Telah Dipilih Klien */}
-                    <div className="flex-1 p-5 overflow-y-auto min-w-0">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
-                        {selectedPhotos.map((photo, idx) => (
-                          <div
-                            key={photo.id || idx}
-                            onClick={() => setSelectedLightboxPhoto(photo)}
-                            className="group relative aspect-square rounded-xl overflow-hidden border border-stone-800 bg-[#0e0d0c] cursor-pointer hover:border-[#C9A26A] transition-all hover:scale-[1.02] shadow-sm"
-                          >
-                            <img
-                              src={photo.thumbnailUrl || photo.url}
-                              alt={photo.filename}
-                              loading="lazy"
-                              className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
-                            />
-                            {/* Number badge */}
-                            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-xs text-[10px] font-bold text-[#C9A26A] border border-[#C9A26A]/40">
-                              #{idx + 1}
+                    <div
+                      className={`flex-1 flex-col min-h-0 overflow-y-auto p-3 sm:p-5 min-w-0 [scrollbar-width:thin] [scrollbar-color:#2e2c29_transparent] ${
+                        viewingSelectedTab === 'photos' ? 'flex' : 'hidden lg:flex'
+                      }`}
+                    >
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 sm:gap-3.5">
+                        {selectedPhotos.map((photo, idx) => {
+                          const printSize = viewingSelectedGallery.photoPrintSizes?.[photo.id]
+                          return (
+                            <div
+                              key={photo.id || idx}
+                              onClick={() => setSelectedLightboxPhoto(photo)}
+                              className="group relative aspect-square rounded-xl overflow-hidden border border-stone-800 bg-[#0e0d0c] cursor-pointer hover:border-[#C9A26A] transition-all hover:scale-[1.02] shadow-sm"
+                            >
+                              <img
+                                src={getPhotoThumbnailUrl(photo, 400)}
+                                alt={photo.filename}
+                                loading="lazy"
+                                referrerPolicy="no-referrer"
+                                onError={(e) => handlePhotoImgError(e, photo, 400)}
+                                className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+                              />
+                              {/* Number badge */}
+                              <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-xs text-[10px] font-bold text-[#C9A26A] border border-[#C9A26A]/40 z-10">
+                                #{idx + 1}
+                              </div>
+                              {/* Print Size badge or Check badge */}
+                              {printSize ? (
+                                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold shadow-md flex items-center gap-1 z-10">
+                                  <Check className="h-3 w-3 stroke-[3]" />
+                                  <span>{printSize}</span>
+                                </div>
+                              ) : (
+                                <div className="absolute top-2 right-2 h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md z-10">
+                                  <Check className="h-3.5 w-3.5 stroke-[3]" />
+                                </div>
+                              )}
+                              {/* Filename footer */}
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2 pt-6">
+                                <p className="text-[11px] font-medium text-white truncate font-mono">
+                                  {photo.filename}
+                                </p>
+                              </div>
                             </div>
-                            {/* Check badge */}
-                            <div className="absolute top-2 right-2 h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-md">
-                              <Check className="h-3.5 w-3.5 stroke-[3]" />
-                            </div>
-                            {/* Filename footer */}
-                            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2.5 pt-6">
-                              <p className="text-[11px] font-medium text-white truncate">
-                                {photo.filename}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
+                      </div>
+
+                      {/* Mobile bottom nav on tab photos */}
+                      <div className="lg:hidden shrink-0 pt-3 mt-3 border-t border-stone-800 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewingSelectedGallery(null)}
+                          className="rounded-xl border border-stone-800 bg-[#242220] hover:bg-[#2d2a27] text-stone-300 px-3.5 py-2.5 text-xs font-semibold cursor-pointer"
+                        >
+                          Tutup
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewingSelectedTab('list')}
+                          className="flex-1 rounded-xl bg-[#201e1c] hover:bg-[#2a2724] border border-stone-700 py-2.5 px-3 text-xs font-semibold text-[#C9A26A] flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          <span>Lihat Daftar & Unduh ZIP ({selectedPhotos.length})</span>
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
                       </div>
                     </div>
 
                     {/* SISI KANAN: Daftar Foto Terpilih */}
-                    <div className="w-full lg:w-[360px] xl:w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l border-stone-800 bg-[#11100f] p-5 flex flex-col overflow-hidden">
+                    <div
+                      className={`w-full lg:w-[360px] xl:w-[400px] shrink-0 border-t lg:border-t-0 lg:border-l border-stone-800 bg-[#11100f] p-4 sm:p-5 flex-col overflow-y-auto min-h-0 flex-1 lg:flex-initial ${
+                        viewingSelectedTab === 'list' ? 'flex' : 'hidden lg:flex'
+                      }`}
+                    >
                       {/* Header & Tombol Salin */}
                       <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
                         <span className="text-xs sm:text-sm font-semibold text-stone-200">
@@ -2583,7 +2956,13 @@ Selamat memilih foto dan enjoy your moments! ✨`
                         <button
                           type="button"
                           onClick={() => {
-                            const text = selectedPhotos.map((p) => p.filename || `Foto-${p.id}`).join('\n')
+                            const text = selectedPhotos
+                              .map((p) => {
+                                const name = p.filename || `Foto-${p.id}`
+                                const size = viewingSelectedGallery.photoPrintSizes?.[p.id]
+                                return size ? `${name} — cetak ${size}` : name
+                              })
+                              .join('\n')
                             navigator.clipboard.writeText(text)
                             setIsCopiedAll(true)
                             setTimeout(() => setIsCopiedAll(false), 2000)
@@ -2607,10 +2986,17 @@ Selamat memilih foto dan enjoy your moments! ✨`
                       </div>
 
                       {/* Box Berisi Daftar Nama File */}
-                      <div className="flex-1 min-h-[160px] rounded-xl border border-stone-800 bg-[#0a0a09] p-3.5 flex flex-col overflow-hidden">
+                      <div className="flex-1 min-h-[140px] rounded-xl border border-stone-800 bg-[#0a0a09] p-3 flex flex-col mb-3.5 overflow-hidden">
                         <textarea
                           readOnly
-                          value={selectedPhotos.map((p) => p.filename || `Foto-${p.id}`).join('\n')}
+                          rows={6}
+                          value={selectedPhotos
+                            .map((p) => {
+                              const name = p.filename || `Foto-${p.id}`
+                              const size = viewingSelectedGallery.photoPrintSizes?.[p.id]
+                              return size ? `${name} — cetak ${size}` : name
+                            })
+                            .join('\n')}
                           className="w-full flex-1 font-mono text-xs sm:text-sm text-stone-200 bg-transparent resize-none focus:outline-none select-all leading-relaxed"
                           placeholder="Belum ada foto yang dipilih..."
                         />
@@ -2623,7 +3009,7 @@ Selamat memilih foto dan enjoy your moments! ✨`
                           handleDownloadSelectedAsZip(selectedPhotos, viewingSelectedGallery.clientName)
                         }
                         disabled={isZipping || selectedPhotos.length === 0}
-                        className="mt-3.5 w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md disabled:opacity-50 cursor-pointer"
+                        className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md disabled:opacity-50 cursor-pointer"
                         title="Unduh seluruh foto terpilih ke satu file ZIP"
                       >
                         {isZipping ? (
@@ -2638,13 +3024,31 @@ Selamat memilih foto dan enjoy your moments! ✨`
                           </>
                         )}
                       </button>
+
+                      {/* Mobile Back button */}
+                      <div className="lg:hidden pt-3 mt-3 border-t border-stone-800 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setViewingSelectedTab('photos')}
+                          className="flex-1 rounded-xl border border-stone-800 bg-[#242220] hover:bg-[#2d2a27] text-stone-300 py-2.5 px-3 text-xs font-semibold cursor-pointer"
+                        >
+                          ← Kembali ke Grid Foto
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewingSelectedGallery(null)}
+                          className="rounded-xl border border-stone-800 bg-[#161514] text-stone-400 py-2.5 px-3 text-xs font-semibold cursor-pointer"
+                        >
+                          Tutup
+                        </button>
+                      </div>
                     </div>
                   </>
                 )}
               </div>
 
               {/* Modal Footer */}
-              <div className="border-t border-stone-800 px-6 py-3.5 bg-[#181716] flex items-center justify-between text-xs text-stone-400 shrink-0">
+              <div className="hidden lg:flex border-t border-stone-800 px-6 py-3.5 bg-[#181716] items-center justify-between text-xs text-stone-400 shrink-0">
                 <span>
                   Ketuk foto manapun untuk melihat dalam resolusi penuh
                 </span>
@@ -2709,8 +3113,10 @@ Selamat memilih foto dan enjoy your moments! ✨`
             onClick={(e) => e.stopPropagation()}
           >
             <img
-              src={selectedLightboxPhoto.url || selectedLightboxPhoto.thumbnailUrl}
+              src={selectedLightboxPhoto.url || (selectedLightboxPhoto.fileId ? `https://drive.google.com/thumbnail?id=${selectedLightboxPhoto.fileId}&sz=w1600` : selectedLightboxPhoto.thumbnailUrl || '')}
               alt={selectedLightboxPhoto.filename}
+              referrerPolicy="no-referrer"
+              onError={(e) => handlePhotoImgError(e, selectedLightboxPhoto, 1600)}
               className="max-h-[75vh] max-w-full object-contain rounded-xl shadow-2xl"
             />
             <div className="mt-3 text-center">

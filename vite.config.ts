@@ -168,7 +168,9 @@ function driveScannerPlugin(defaultApiKey = ''): Plugin {
                             fileId: item.id,
                             filename: item.name || `FOTO_${String(allPhotos.length + 1).padStart(4, '0')}.JPG`,
                             url: `https://lh3.googleusercontent.com/d/${item.id}`,
-                            thumbnailUrl: `https://drive.google.com/thumbnail?id=${item.id}&sz=w800`,
+                            thumbnailUrl: item.thumbnailLink
+                              ? item.thumbnailLink.replace(/=s\d+/, '=s800')
+                              : `https://drive.google.com/thumbnail?id=${item.id}&sz=w800`,
                             mimeType: item.mimeType,
                             size: item.size ? Number(item.size) : undefined,
                             aspect,

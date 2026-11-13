@@ -28,8 +28,14 @@ export interface GalleryPhoto extends DrivePhotoItem {
   aspect?: 'portrait' | 'landscape'
 }
 
-export function getPhotoThumbnailUrl(photo: GalleryPhoto, size = 600): string {
-  const fileId = photo.fileId || (/^[a-zA-Z0-9_-]{25,}$/.test(photo.id) ? photo.id : '')
+export function getPhotoThumbnailUrl(
+  photo: { fileId?: string; id?: string; url?: string; thumbnailUrl?: string },
+  size = 600
+): string {
+  const fileId = photo.fileId || (/^[a-zA-Z0-9_-]{25,}$/.test(photo.id || '') ? photo.id : '')
+  if (photo.thumbnailUrl && photo.thumbnailUrl.includes('drive-viewer')) {
+    return photo.thumbnailUrl
+  }
   if (fileId) {
     return `https://drive.google.com/thumbnail?id=${fileId}&sz=w${size}`
   }
@@ -37,6 +43,134 @@ export function getPhotoThumbnailUrl(photo: GalleryPhoto, size = 600): string {
     return photo.thumbnailUrl
   }
   return photo.url || ''
+}
+
+export function handlePhotoImgError(
+  e: { currentTarget: HTMLImageElement },
+  photo: { fileId?: string; id?: string; url?: string; thumbnailUrl?: string },
+  size = 800
+): void {
+  const img = e.currentTarget
+  const fileId = photo.fileId || (/^[a-zA-Z0-9_-]{25,}$/.test(photo.id || '') ? photo.id : '')
+  const retry = Number(img.dataset.retryCount || '0')
+
+  if (retry >= 6) return
+
+  img.dataset.retryCount = String(retry + 1)
+
+  if (!fileId) {
+    if (photo.url && img.src !== photo.url) {
+      img.src = photo.url
+    }
+    return
+  }
+
+  // Multi-tier CDN fallback endpoints for Google Drive
+  const fallbacks = [
+    `https://lh3.googleusercontent.com/d/${fileId}=w${size}`,
+    `https://drive.google.com/uc?export=view&id=${fileId}`,
+    `https://lh3.googleusercontent.com/d/${fileId}`,
+    `https://drive.usercontent.google.com/download?id=${fileId}&export=view`,
+    `https://docs.google.com/uc?export=view&id=${fileId}`,
+    `https://drive.google.com/thumbnail?id=${fileId}&sz=w${size}&t=${Date.now()}`,
+  ]
+
+  let nextSrc = fallbacks[retry]
+  if (nextSrc === img.src && retry + 1 < fallbacks.length) {
+    nextSrc = fallbacks[retry + 1]
+  }
+
+  if (nextSrc) {
+    setTimeout(() => {
+      img.src = nextSrc
+    }, (retry + 1) * 150)
+  }
+}
+
+export interface PreloadPhotosResult {
+  photoRatios: Record<string, number>
+}
+
+export function preloadInitialGalleryPhotos(
+  photos: Array<{ id?: string; fileId?: string; url?: string; thumbnailUrl?: string }>,
+  count = 14,
+  timeoutMs = 4000
+): Promise<PreloadPhotosResult> {
+  const result: PreloadPhotosResult = { photoRatios: {} }
+  if (!photos || photos.length === 0) return Promise.resolve(result)
+
+  const target = photos.slice(0, count)
+  let completed = 0
+
+  return new Promise((resolve) => {
+    let isDone = false
+    const finish = () => {
+      if (!isDone) {
+        isDone = true
+        resolve(result)
+      }
+    }
+
+    // Safeguard timeout
+    const timer = setTimeout(finish, timeoutMs)
+
+    target.forEach((p) => {
+      const src = getPhotoThumbnailUrl(p, 600)
+      if (!src) {
+        completed++
+        if (completed >= target.length) {
+          clearTimeout(timer)
+          finish()
+        }
+        return
+      }
+
+      const img = new Image()
+      img.referrerPolicy = 'no-referrer'
+      img.onload = () => {
+        if (p.id && img.naturalWidth && img.naturalHeight) {
+          result.photoRatios[p.id] = img.naturalWidth / img.naturalHeight
+        }
+        completed++
+        if (completed >= target.length) {
+          clearTimeout(timer)
+          finish()
+        }
+      }
+      img.onerror = () => {
+        const fileId = p.fileId || (/^[a-zA-Z0-9_-]{25,}$/.test(p.id || '') ? p.id : '')
+        if (fileId) {
+          const fallback = new Image()
+          fallback.referrerPolicy = 'no-referrer'
+          fallback.src = `https://lh3.googleusercontent.com/d/${fileId}=w600`
+          fallback.onload = () => {
+            if (p.id && fallback.naturalWidth && fallback.naturalHeight) {
+              result.photoRatios[p.id] = fallback.naturalWidth / fallback.naturalHeight
+            }
+            completed++
+            if (completed >= target.length) {
+              clearTimeout(timer)
+              finish()
+            }
+          }
+          fallback.onerror = () => {
+            completed++
+            if (completed >= target.length) {
+              clearTimeout(timer)
+              finish()
+            }
+          }
+        } else {
+          completed++
+          if (completed >= target.length) {
+            clearTimeout(timer)
+            finish()
+          }
+        }
+      }
+      img.src = src
+    })
+  })
 }
 
 export interface GalleryData {
@@ -59,6 +193,9 @@ export interface GalleryData {
   selectedPhotoIds: string[]
   photos: GalleryPhoto[]
   allowDownload?: boolean
+  printSizes?: string[]
+  printSizeQuotas?: Record<string, number>
+  photoPrintSizes?: Record<string, string>
 }
 
 const STORAGE_KEY = 'livein_galleries_v3'
@@ -204,6 +341,15 @@ export function normalizeGalleryItem(item: any): GalleryData {
     photos,
     allowDownload:
       item.allowDownload !== undefined ? Boolean(item.allowDownload) : true,
+    printSizes: Array.isArray(item.printSizes) ? item.printSizes.map(String) : undefined,
+    printSizeQuotas:
+      item.printSizeQuotas && typeof item.printSizeQuotas === 'object'
+        ? (item.printSizeQuotas as Record<string, number>)
+        : undefined,
+    photoPrintSizes:
+      item.photoPrintSizes && typeof item.photoPrintSizes === 'object'
+        ? (item.photoPrintSizes as Record<string, string>)
+        : undefined,
   }
 }
 

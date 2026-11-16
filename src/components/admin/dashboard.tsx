@@ -421,11 +421,6 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
       return
     }
 
-    if (editPrintSizes.length === 0) {
-      showToast('Harap pilih minimal satu Opsi Ukuran Cetak.')
-      return
-    }
-
     const editAvailablePhotosCount = (
       editNewScannedPhotos && editNewScannedPhotos.length > 0
         ? editNewScannedPhotos
@@ -798,11 +793,6 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
     if (!clientWhatsapp.trim()) {
       showToast('Harap masukkan Nomor WhatsApp Klien.')
       document.getElementById('clientWhatsapp')?.focus()
-      return
-    }
-
-    if (printSizes.length === 0) {
-      showToast('Harap pilih minimal satu Opsi Ukuran Cetak.')
       return
     }
 
@@ -1598,8 +1588,8 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-semibold text-stone-200 flex items-center gap-2">
                       <span>5. Opsi Ukuran Cetak</span>
-                      <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
-                        Wajib
+                      <span className="text-[10px] text-stone-400 font-medium bg-stone-800/60 px-1.5 py-0.5 rounded border border-stone-700/60">
+                        Opsional
                       </span>
                     </label>
                     {printSizes.length > 0 && (
@@ -2473,8 +2463,8 @@ Jika sudah bisa dikirimkan kembali hasil pilihannya, selamat memilih foto dan en
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-semibold text-stone-300 flex items-center gap-2">
                     <span>Opsi Ukuran Cetak</span>
-                    <span className="text-[10px] text-rose-400 font-medium bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-900/40">
-                      Wajib
+                    <span className="text-[10px] text-stone-400 font-medium bg-stone-800/60 px-1.5 py-0.5 rounded border border-stone-700/60">
+                      Opsional
                     </span>
                   </label>
                   {editPrintSizes.length > 0 && (
